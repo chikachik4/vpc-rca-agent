@@ -89,3 +89,12 @@ async def test_query_returns_zero_on_nan(loop):
 
         result = await loop._query("up")
         assert result == 0.0
+
+
+def test_cooldown_logic(loop):
+    signal = "backend_warn_error_logs"
+    assert loop._is_in_cooldown(signal) is False
+    loop._last_triggered_at[signal] = 0.0
+    # no assertion for absolute monotonic time; just verify explicit recent marker works
+    loop._last_triggered_at[signal] = __import__("time").monotonic()
+    assert loop._is_in_cooldown(signal) is True

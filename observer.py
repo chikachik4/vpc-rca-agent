@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 
 import httpx
 
@@ -16,6 +17,10 @@ def _tls():
 
 class ObserverLoop:
     """Poll broad service health signals and let RCAAgent narrow the root cause."""
+    COOLDOWN_SECONDS = 300
+
+    def __init__(self):
+        self._last_triggered_at: dict[str, float] = {}
 
     @property
     def QUERIES(self):
@@ -108,6 +113,12 @@ class ObserverLoop:
             return value < threshold
         return False
 
+    def _is_in_cooldown(self, signal_name: str) -> bool:
+        last_ts = self._last_triggered_at.get(signal_name)
+        if last_ts is None:
+            return False
+        return (time.monotonic() - last_ts) < self.COOLDOWN_SECONDS
+
     async def start(self):
         logger.info(
             "Prometheus observer started (interval=%ds, queries=%d)",
@@ -131,11 +142,19 @@ class ObserverLoop:
                 )
 
                 if breached:
+                    if self._is_in_cooldown(query["name"]):
+                        logger.info(
+                            "Observer cooldown active [%s], skipping duplicate trigger",
+                            query["name"],
+                        )
+                        continue
+
                     symptom = query["symptom_template"].format(
                         value=value,
                         threshold=query["threshold"],
                     )
                     logger.warning("Signal breached [%s]: %s", query["name"], symptom)
+                    self._last_triggered_at[query["name"]] = time.monotonic()
                     await redis_client.publish(
                         "rca.input",
                         {
