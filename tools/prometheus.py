@@ -1,6 +1,10 @@
-from strands import tool
 import httpx
+from strands import tool
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 @tool
 async def query_prometheus(promql: str) -> str:
@@ -16,4 +20,5 @@ async def query_prometheus(promql: str) -> str:
             r.raise_for_status()
             return r.text
     except Exception as exc:
+        logger.error("Prometheus query failed (%s): %s", promql[:60], exc)
         return f"ERROR: Prometheus query failed: {exc}"

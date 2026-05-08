@@ -23,13 +23,24 @@ class Settings(BaseSettings):
 
     MCP_CONFIG_PATH: str = "mcp_config.json"
 
-    # ObserverLoop
+    # ObserverLoop — 폴링 간격
     OBSERVER_INTERVAL_SEC: int = 15
-    CPU_ALERT_THRESHOLD: float = 0.5   # cores
+
+    # ObserverLoop — 임계값
+    CPU_ALERT_THRESHOLD: float = 0.5          # cores (VPC1)
+    POD_RESTART_THRESHOLD: int = 3             # 횟수/5분
+    HEALTH_SCORE_THRESHOLD: float = 80.0       # Health Score 하한 (80 미만 = Warning)
+    REDIS_MISS_RATE_THRESHOLD: float = 0.1     # req/s
+    DB_CONN_THRESHOLD: int = 15                # active connections
+    RESPONSE_TIME_THRESHOLD: float = 0.1       # 초 (100ms)
+    ERROR_RATE_THRESHOLD: float = 0.05         # 5%
 
     # ReportDispatcher
     SLACK_WEBHOOK_URL: str = ""        # 비어있으면 Slack 발송 스킵
     REPORT_DIR: str = "reports"
+
+    # Logging
+    LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

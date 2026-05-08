@@ -1,7 +1,10 @@
 import time
-from strands import tool
 import httpx
+from strands import tool
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _tls():
@@ -32,6 +35,7 @@ async def query_tempo_traces(service: str, minutes: int = 30, limit: int = 5) ->
             r.raise_for_status()
             return r.text
     except Exception as exc:
+        logger.error("Tempo search failed for service=%s: %s", service, exc)
         return f"ERROR: Tempo search failed for service={service}: {exc}"
 
 
@@ -47,4 +51,5 @@ async def get_tempo_trace(trace_id: str) -> str:
             r.raise_for_status()
             return r.text
     except Exception as exc:
+        logger.error("Tempo trace fetch failed for id=%s: %s", trace_id, exc)
         return f"ERROR: Tempo trace fetch failed for id={trace_id}: {exc}"

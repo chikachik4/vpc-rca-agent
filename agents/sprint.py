@@ -7,6 +7,9 @@ from tools.opensearch import search_logs, vector_search
 from tools.tempo import query_tempo_traces, get_tempo_trace
 from infrastructure.redis_client import redis_client
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 SPRINT_PROMPT = """
 당신은 빠른 인프라 데이터 조회 전문가입니다.
@@ -21,7 +24,7 @@ class SprintAgent:
         self._subscription_task = None
         self.agent = Agent(
             model=BedrockModel(
-                model_id=settings.LLM_MODEL_ROUTING,   # Haiku: 빠름
+                model_id=settings.LLM_MODEL_ROUTING,
                 region_name=settings.AWS_REGION,
             ),
             tools=[
@@ -38,10 +41,11 @@ class SprintAgent:
 
     async def handle(self, data: dict):
         query = data.get("query", "")
+        logger.info("[Sprint] 조회 시작: %s", query)
         await redis_client.publish("rca.output", {
             "type": "status",
             "sender": "Sprint",
-            "text": f"⚡ 조회 중: {query}",
+            "text": f"[Sprint] 조회 중: {query}",
         })
 
         result = str(await asyncio.to_thread(self.agent, query))
@@ -54,6 +58,6 @@ class SprintAgent:
         })
 
     async def start(self):
-        print("⚡  [Sprint] rca.sprint 대기 중...")
+        logger.info("[Sprint] rca.sprint 대기 중...")
         self._subscription_task = await redis_client.subscribe("rca.sprint", self.handle)
         await asyncio.Future()

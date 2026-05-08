@@ -4,6 +4,9 @@ from strands import Agent
 from strands.models import BedrockModel
 from infrastructure.redis_client import redis_client
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 ARCHITECT_PROMPT = """
 당신은 인프라 장애 조사 계획을 수립하는 시니어 SRE입니다.
@@ -40,34 +43,31 @@ class ArchitectAgent:
         await redis_client.publish("rca.output", {
             "type": "status",
             "sender": "Architect",
-            "text": f"📐 조사 계획 수립 중... (트리거: {source})",
+            "text": f"[Architect] 조사 계획 수립 중... (트리거: {source})",
         })
 
         raw_plan = str(await asyncio.to_thread(self.agent, data.get("text", "")))
-        
-        # JSON 검증 및 보정
+
+        # LLM이 간혹 ```json ... ``` 래퍼를 포함할 수 있으므로 정규화
         try:
-            # LLM이 간혹 ```json ... ``` 코드를 포함할 수 있으므로 정규화
-            clean_plan = raw_plan.strip()
-            if clean_plan.startswith("```"):
-                clean_plan = clean_plan.split("```")[1]
-                if clean_plan.startswith("json"):
-                    clean_plan = clean_plan[4:].strip()
-            
-            plan_json = json.loads(clean_plan)
-            # 필수 필드 보장
+            clean = raw_plan.strip()
+            if clean.startswith("```"):
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:].strip()
+
+            plan_json = json.loads(clean)
             plan_json.setdefault("mode", "beginner")
             plan_str = json.dumps(plan_json, ensure_ascii=False)
         except Exception as e:
-            print(f"[ERROR] Architect JSON parsing failed: {e}")
-            # Fallback 구조
+            logger.error("Architect JSON 파싱 실패: %s", e)
             plan_json = {
                 "mode": "beginner",
                 "symptom": data.get("text", "알 수 없는 장애"),
                 "timerange": "last 1h",
                 "vpc_scope": ["vpc1", "vpc3"],
                 "investigation_steps": ["CloudWatch 확인"],
-                "priority_hypothesis": "분석 실패로 인한 기본 조사"
+                "priority_hypothesis": "분석 실패로 인한 기본 조사",
             }
             plan_str = json.dumps(plan_json, ensure_ascii=False)
 
@@ -79,10 +79,10 @@ class ArchitectAgent:
         await redis_client.publish("rca.output", {
             "type": "status",
             "sender": "Architect",
-            "text": f"✅ 조사 계획 ({plan_json['mode']} 모드)\n{plan_str}",
+            "text": f"[Architect] 조사 계획 완료 ({plan_json['mode']} 모드)\n{plan_str}",
         })
 
     async def start(self):
-        print("🏗️  [Architect] rca.input 대기 중...")
+        logger.info("[Architect] rca.input 대기 중...")
         self._subscription_task = await redis_client.subscribe("rca.input", self.handle)
         await asyncio.Future()

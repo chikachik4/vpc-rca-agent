@@ -4,6 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from infrastructure.redis_client import redis_client
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ReportDispatcher:
@@ -34,21 +37,22 @@ class ReportDispatcher:
                     timeout=settings.REQUEST_TIMEOUT_SECONDS,
                 )
         except Exception as e:
-            print(f"[Dispatcher] Slack 발송 실패: {e}")
+            logger.error("Slack 발송 실패: %s", e)
 
     async def handle(self, msg: dict):
         sender = msg.get("sender", "SYSTEM")
         text   = msg.get("text", "")
         mtype  = msg.get("type", "status")
 
-        print(f"\n[{sender}] {text}")
-
         if mtype == "report":
+            logger.info("[%s] 리포트 수신", sender)
             path = await self._save_file(text)
-            print(f"[Dispatcher] 리포트 저장: {path}")
+            logger.info("리포트 저장: %s", path)
             await self._send_slack(text)
+        else:
+            logger.info("[%s] %s", sender, text)
 
     async def start(self):
-        print("[Dispatcher] rca.output 구독 시작...")
+        logger.info("[Dispatcher] rca.output 구독 시작...")
         self._subscription_task = await redis_client.subscribe("rca.output", self.handle)
         await asyncio.Future()

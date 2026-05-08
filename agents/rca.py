@@ -6,6 +6,9 @@ from strands.tools.mcp import MCPClient
 from mcp import StdioServerParameters
 from infrastructure.redis_client import redis_client
 from core.config import settings
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 RCA_PROMPT_BASE = """
 당신은 AWS 인프라 증거 기반 RCA 전문가입니다. 반드시 다음 규칙을 따르세요:
@@ -62,10 +65,20 @@ class RCAAgent:
         self._sprint_subscription_task = None
 
     async def _init_mcp(self):
-        with open(settings.MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
-            config = json.load(f)
+        try:
+            with open(settings.MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except FileNotFoundError:
+            logger.error("MCP 설정 파일을 찾을 수 없습니다: %s — MCP 없이 계속합니다",
+                         settings.MCP_CONFIG_PATH)
+            self._build_agent("beginner")
+            return
+        except json.JSONDecodeError as e:
+            logger.error("MCP 설정 파일 파싱 실패: %s — MCP 없이 계속합니다", e)
+            self._build_agent("beginner")
+            return
 
-        for _, srv in config.get("mcpServers", {}).items():
+        for srv_name, srv in config.get("mcpServers", {}).items():
             env = srv.get("env", {}).copy()
             for k, v in env.items():
                 if v == "${EKS_CLUSTER_NAME}":
@@ -77,13 +90,14 @@ class RCAAgent:
                 args=srv["args"],
                 env=env,
             ))
-            self._mcp_clients.append(client)
-
-        for client in self._mcp_clients:
-            await client.__aenter__()
-            tools = await client.list_tools()
-            self._mcp_tools.extend(tools)
-            print(f"📦 [RCA] MCP 서버에서 {len(tools)}개 도구 로드")
+            try:
+                await client.__aenter__()
+                tools = await client.list_tools()
+                self._mcp_clients.append(client)
+                self._mcp_tools.extend(tools)
+                logger.info("MCP 서버 [%s] — %d개 도구 로드", srv_name, len(tools))
+            except Exception as e:
+                logger.error("MCP 서버 [%s] 초기화 실패, 건너뜀: %s", srv_name, e)
 
         self._build_agent("beginner")
 
@@ -102,14 +116,22 @@ class RCAAgent:
             system_prompt=system_prompt,
         )
 
+    def _extract_sprint_query(self, result: str) -> str:
+        """__SPRINT__: 마커에서 첫 번째 줄의 쿼리를 추출합니다. 실패 시 빈 문자열 반환."""
+        try:
+            _, rest = result.split("__SPRINT__:", 1)
+            return rest.strip().splitlines()[0].strip()
+        except Exception as e:
+            logger.warning("__SPRINT__ 쿼리 추출 실패: %s", e)
+            return ""
+
     async def handle_plan(self, data: dict):
         raw_mode = data.get("mode", "beginner")
         mode = raw_mode if raw_mode in MODE_INSTRUCTIONS else "beginner"
 
         plan = data.get("plan", "").strip()
         if not plan:
-            import json as _json
-            plan = _json.dumps({
+            plan = json.dumps({
                 "mode": mode,
                 "symptom": data.get("original", "알 수 없는 장애"),
                 "timerange": "last 1h",
@@ -117,7 +139,7 @@ class RCAAgent:
                 "investigation_steps": ["CloudWatch 확인", "EKS 이벤트 확인"],
                 "priority_hypothesis": "빈 계획 수신 — 기본 조사 수행",
             }, ensure_ascii=False)
-            print(f"[RCA] 빈 plan 수신, fallback plan 사용")
+            logger.warning("빈 plan 수신, fallback plan 사용")
 
         self._build_agent(mode)
 
@@ -130,11 +152,10 @@ class RCAAgent:
         result = str(await asyncio.to_thread(self.agent, plan))
 
         if "__SPRINT__:" in result:
-            _, rest = result.split("__SPRINT__:", 1)
-            sprint_query = rest.strip().splitlines()[0].strip()
+            sprint_query = self._extract_sprint_query(result)
 
             if not sprint_query:
-                print("[RCA] __SPRINT__ 쿼리가 비어있어 Sprint 호출 건너뜀")
+                logger.warning("__SPRINT__ 쿼리가 비어있어 Sprint 호출 건너뜀")
             else:
                 self._sprint_event.clear()
                 self._sprint_result = ""
@@ -147,8 +168,9 @@ class RCAAgent:
 
                 try:
                     await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
+                    logger.info("Sprint 결과 수신 완료")
                 except asyncio.TimeoutError:
-                    print("[RCA] Sprint 타임아웃")
+                    logger.warning("Sprint 응답 타임아웃 (15s)")
                     self._sprint_result = "조회 타임아웃 발생"
 
                 final_prompt = (
@@ -170,7 +192,7 @@ class RCAAgent:
 
     async def start(self):
         await self._init_mcp()
-        print("🧠  [RCA] rca.plan 및 rca.sprint.result 대기 중...")
+        logger.info("[RCA] rca.plan 및 rca.sprint.result 대기 중...")
         self._plan_subscription_task = await redis_client.subscribe(
             "rca.plan", self.handle_plan
         )
