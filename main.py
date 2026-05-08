@@ -58,7 +58,7 @@ async def main():
 
         for client in getattr(rca, "_mcp_clients", []):
             try:
-                await client.__aexit__(None, None, None)
+                client.stop(None, None, None)
             except Exception:
                 pass
         if getattr(rca, "_mcp_clients", []):
