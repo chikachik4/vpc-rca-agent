@@ -7,19 +7,38 @@ from mcp import StdioServerParameters
 from infrastructure.redis_client import redis_client
 from core.config import settings
 
-RCA_PROMPT = """
+RCA_PROMPT_BASE = """
 당신은 AWS 인프라 증거 기반 RCA 전문가입니다. 반드시 다음 규칙을 따르세요:
 1. 범위: VPC1(EKS)과 VPC3(공유 허브) 리소스만 조회
-2. 조사 순서: CloudWatch 알람/메트릭 → EKS 이벤트/로그 → CloudTrail 변경 이력
+2. 조사 순서: CloudWatch 알람/메트릭 → Application Signals(트레이싱) → EKS 이벤트/로그 → CloudTrail 변경 이력
 3. VPC3 데이터(Prometheus/ArgoCD/OpenSearch)가 필요하면 반드시 "__SPRINT__:{구체적 쿼리}" 형식으로 한 줄 삽입
-4. 출력 포맷 (한국어):
-   [증상 요약] ...
-   [영향 범위] ...
-   [타임라인] ...
-   [가설 A] ... 신뢰도: XX%
-   [가설 B] ... 신뢰도: XX%
-   [권장 조치] ...
-5. Read-only 원칙: 어떤 리소스도 수정하지 않음
+4. Read-only 원칙: 어떤 리소스도 수정하지 않음
+"""
+
+MODE_INSTRUCTIONS = {
+    "beginner": """
+[Beginner 모드 지침]
+- 어려운 IT 기술 용어를 사용할 때는 반드시 쉬운 설명을 덧붙이세요.
+- 장애 원인을 비유를 들어 설명하면 좋습니다.
+- 조치 가이드는 명령어를 그대로 복사해서 쓸 수 있을 정도로 아주 상세하게 작성하세요.
+""",
+    "expert": """
+[Expert 모드 지침]
+- 핵심 메트릭 수치, 에러 로그 원문, CloudTrail API 호출 이력을 가감 없이 보고하세요.
+- 불필요한 서술은 줄이고 기술적 사실 위주로 간결하게 작성하세요.
+- 아키텍처 관점에서의 근본 원인(Deep Root Cause)을 제시하세요.
+"""
+}
+
+RCA_OUTPUT_FORMAT = """
+[출력 포맷 (한국어)]
+1. [증상 요약] ...
+2. [영향 범위] ...
+3. [타임라인] (지표 변화 및 CloudTrail 변경 이력 포함)
+4. [가설 A] ... 신뢰도: XX%
+5. [가설 B] ... 신뢰도: XX% (최소 2개 가설 필수)
+6. [최종 결론] (가설 검증 결과 요약)
+7. [권장 조치] (단기/장기 분리)
 """
 
 class RCAAgent:
@@ -60,20 +79,31 @@ class RCAAgent:
             self._mcp_tools.extend(tools)
             print(f"📦 [RCA] Loaded {len(tools)} tools from MCP server")
 
+        # 초기 에이전트 (기본 프롬프트)
+        self._build_agent("beginner")
+
+    def _build_agent(self, mode: str):
+        system_prompt = f"{RCA_PROMPT_BASE}\n{MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS['beginner'])}\n{RCA_OUTPUT_FORMAT}"
         self.agent = Agent(
             model=BedrockModel(
                 model_id=settings.LLM_MODEL_EXPERT,
                 region_name=settings.AWS_REGION,
             ),
             tools=self._mcp_tools,
-            system_prompt=RCA_PROMPT,
+            system_prompt=system_prompt,
         )
 
     async def handle_plan(self, data: dict):
-        await redis_client.publish("rca.output",
-            {"sender": "RCA", "text": "🔍 증거 수집 시작..."})
+        mode = data.get("mode", "beginner")
+        plan = data.get("plan", "")
+        
+        # 모드에 맞게 에이전트 시스템 프롬프트 재설정
+        self._build_agent(mode)
 
-        result = str(await asyncio.to_thread(self.agent, data["plan"]))
+        await redis_client.publish("rca.output",
+            {"sender": "RCA", "text": f"🔍 증거 수집 시작 ({mode} 모드)..."})
+
+        result = str(await asyncio.to_thread(self.agent, plan))
 
         if "__SPRINT__:" in result:
             before, rest = result.split("__SPRINT__:", 1)

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from strands import Agent
 from strands.models import BedrockModel
 from infrastructure.redis_client import redis_client
@@ -6,8 +7,13 @@ from core.config import settings
 
 ARCHITECT_PROMPT = """
 당신은 인프라 장애 조사 계획을 수립하는 시니어 SRE입니다.
-사용자의 자연어 장애 보고를 받아 반드시 다음 JSON 형식으로만 출력하세요:
+사용자의 자연어 장애 보고를 받아 분석하고, 사용자의 의도나 말투를 보고 'beginner' 또는 'expert' 모드를 판별하세요.
+- beginner: 자동화된 전체 조사 선호, 친절하고 쉬운 용어 설명 필요.
+- expert: 특정 시간대/리소스 지정 선호, 기술적인 상세 메트릭 및 가설 검증 중심.
+
+반드시 다음 JSON 형식으로만 출력하세요:
 {
+  "mode": "beginner" 또는 "expert",
   "symptom": "증상 한 줄 요약",
   "timerange": "조사 시간 범위 (예: last 30m)",
   "vpc_scope": ["vpc1", "vpc3"],
@@ -32,12 +38,38 @@ class ArchitectAgent:
         await redis_client.publish("rca.output",
             {"sender": "Architect", "text": "📐 조사 계획 수립 중..."})
 
-        plan = str(await asyncio.to_thread(self.agent, data.get("text", "")))
+        raw_plan = str(await asyncio.to_thread(self.agent, data.get("text", "")))
+        
+        # JSON 검증 및 보정
+        try:
+            # LLM이 간혹 ```json ... ``` 코드를 포함할 수 있으므로 정규화
+            clean_plan = raw_plan.strip()
+            if clean_plan.startswith("```"):
+                clean_plan = clean_plan.split("```")[1]
+                if clean_plan.startswith("json"):
+                    clean_plan = clean_plan[4:].strip()
+            
+            plan_json = json.loads(clean_plan)
+            # 필수 필드 보장
+            plan_json.setdefault("mode", "beginner")
+            plan_str = json.dumps(plan_json, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] Architect JSON parsing failed: {e}")
+            # Fallback 구조
+            plan_json = {
+                "mode": "beginner",
+                "symptom": data.get("text", "알 수 없는 장애"),
+                "timerange": "last 1h",
+                "vpc_scope": ["vpc1", "vpc3"],
+                "investigation_steps": ["CloudWatch 확인"],
+                "priority_hypothesis": "분석 실패로 인한 기본 조사"
+            }
+            plan_str = json.dumps(plan_json, ensure_ascii=False)
 
         await redis_client.publish("rca.plan",
-            {"plan": plan, "original": data.get("text", "")})
+            {"plan": plan_str, "mode": plan_json["mode"], "original": data.get("text", "")})
         await redis_client.publish("rca.output",
-            {"sender": "Architect", "text": f"✅ 조사 계획\n{plan}"})
+            {"sender": "Architect", "text": f"✅ 조사 계획 ({plan_json['mode']} 모드)\n{plan_str}"})
 
     async def start(self):
         print("🏗️  [Architect] rca.input 대기 중...")
