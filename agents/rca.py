@@ -94,7 +94,7 @@ class RCAAgent:
             )))
             started = False
             try:
-                await asyncio.to_thread(client.start)
+                client.start()
                 started = True
                 tools = await client.load_tools()
                 self._mcp_clients.append(client)
