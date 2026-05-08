@@ -103,44 +103,60 @@ class RCAAgent:
         )
 
     async def handle_plan(self, data: dict):
-        mode = data.get("mode", "beginner")
-        plan = data.get("plan", "")
+        raw_mode = data.get("mode", "beginner")
+        mode = raw_mode if raw_mode in MODE_INSTRUCTIONS else "beginner"
+
+        plan = data.get("plan", "").strip()
+        if not plan:
+            import json as _json
+            plan = _json.dumps({
+                "mode": mode,
+                "symptom": data.get("original", "알 수 없는 장애"),
+                "timerange": "last 1h",
+                "vpc_scope": ["vpc1", "vpc3"],
+                "investigation_steps": ["CloudWatch 확인", "EKS 이벤트 확인"],
+                "priority_hypothesis": "빈 계획 수신 — 기본 조사 수행",
+            }, ensure_ascii=False)
+            print(f"[RCA] 빈 plan 수신, fallback plan 사용")
 
         self._build_agent(mode)
 
         await redis_client.publish("rca.output", {
             "type": "status",
             "sender": "RCA",
-            "text": f"🔍 증거 수집 시작 ({mode} 모드)...",
+            "text": f"[RCA] 증거 수집 시작 ({mode} 모드)...",
         })
 
         result = str(await asyncio.to_thread(self.agent, plan))
 
         if "__SPRINT__:" in result:
             _, rest = result.split("__SPRINT__:", 1)
-            sprint_query = rest.strip().splitlines()[0]
+            sprint_query = rest.strip().splitlines()[0].strip()
 
-            self._sprint_event.clear()
-            self._sprint_result = ""
-            await redis_client.publish("rca.sprint", {"query": sprint_query})
-            await redis_client.publish("rca.output", {
-                "type": "status",
-                "sender": "RCA",
-                "text": f"⏳ Sprint 조회 요청: {sprint_query}",
-            })
+            if not sprint_query:
+                print("[RCA] __SPRINT__ 쿼리가 비어있어 Sprint 호출 건너뜀")
+            else:
+                self._sprint_event.clear()
+                self._sprint_result = ""
+                await redis_client.publish("rca.sprint", {"query": sprint_query})
+                await redis_client.publish("rca.output", {
+                    "type": "status",
+                    "sender": "RCA",
+                    "text": f"[RCA] Sprint 조회 요청: {sprint_query}",
+                })
 
-            try:
-                await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
-            except asyncio.TimeoutError:
-                print("⚠️ [RCA] Sprint 타임아웃")
-                self._sprint_result = "조회 타임아웃 발생"
+                try:
+                    await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    print("[RCA] Sprint 타임아웃")
+                    self._sprint_result = "조회 타임아웃 발생"
 
-            final_prompt = (
-                f"{plan}\n\n"
-                f"[Sprint 조회 결과]\n{self._sprint_result}\n\n"
-                "위 결과를 포함해 최종 RCA를 완성하세요."
-            )
-            result = str(await asyncio.to_thread(self.agent, final_prompt))
+                final_prompt = (
+                    f"{plan}\n\n"
+                    f"[Sprint 조회 결과]\n{self._sprint_result}\n\n"
+                    "위 결과를 포함해 최종 RCA를 완성하세요."
+                )
+                result = str(await asyncio.to_thread(self.agent, final_prompt))
 
         await redis_client.publish("rca.output", {
             "type": "report",

@@ -9,11 +9,12 @@ from core.config import settings
 class ReportDispatcher:
     """
     rca.output 채널을 구독합니다.
-    type="status" → 콘솔만 출력
-    type="report"  → 콘솔 + 파일 저장 + Slack 발송
+    type="status" -> 콘솔만 출력
+    type="report"  -> 콘솔 + 파일 저장 + Slack 발송
     """
 
     def __init__(self):
+        self._subscription_task: asyncio.Task | None = None
         Path(settings.REPORT_DIR).mkdir(exist_ok=True)
 
     async def _save_file(self, text: str) -> str:
@@ -29,8 +30,8 @@ class ReportDispatcher:
             async with httpx.AsyncClient() as client:
                 await client.post(
                     settings.SLACK_WEBHOOK_URL,
-                    json={"text": f"🚨 *RCA 리포트*\n```{text[:2900]}```"},
-                    timeout=5.0,
+                    json={"text": f"[RCA Report]\n```{text[:2900]}```"},
+                    timeout=settings.REQUEST_TIMEOUT_SECONDS,
                 )
         except Exception as e:
             print(f"[Dispatcher] Slack 발송 실패: {e}")
@@ -44,10 +45,10 @@ class ReportDispatcher:
 
         if mtype == "report":
             path = await self._save_file(text)
-            print(f"📁 리포트 저장: {path}")
+            print(f"[Dispatcher] 리포트 저장: {path}")
             await self._send_slack(text)
 
     async def start(self):
-        print("📤 [Dispatcher] rca.output 구독 시작...")
-        await redis_client.subscribe("rca.output", self.handle)
+        print("[Dispatcher] rca.output 구독 시작...")
+        self._subscription_task = await redis_client.subscribe("rca.output", self.handle)
         await asyncio.Future()
