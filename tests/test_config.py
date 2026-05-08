@@ -14,10 +14,11 @@ def test_defaults():
 
 
 def test_tls_defaults():
-    assert isinstance(settings.TLS_VERIFY, bool)
+    assert settings.TLS_VERIFY is True
     assert settings.CA_BUNDLE_PATH == ""
 
 
 def test_tls_helper_returns_bool_when_no_bundle():
     verify = settings.CA_BUNDLE_PATH if settings.CA_BUNDLE_PATH else settings.TLS_VERIFY
     assert isinstance(verify, bool)
+    assert verify is True

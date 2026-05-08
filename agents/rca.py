@@ -2,6 +2,7 @@ import asyncio
 import json
 
 from mcp import StdioServerParameters
+from mcp.client.stdio import stdio_client
 from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
@@ -86,24 +87,24 @@ class RCAAgent:
                     env[k] = settings.EKS_CLUSTER_NAME
             env.setdefault("AWS_REGION", settings.AWS_REGION)
 
-            client = MCPClient(lambda srv=srv, env=env: StdioServerParameters(
+            client = MCPClient(lambda srv=srv, env=env: stdio_client(StdioServerParameters(
                 command=srv["command"],
                 args=srv["args"],
                 env=env,
-            ))
-            entered = False
+            )))
+            started = False
             try:
-                await client.__aenter__()
-                entered = True
-                tools = await client.list_tools()
+                await asyncio.to_thread(client.start)
+                started = True
+                tools = await client.load_tools()
                 self._mcp_clients.append(client)
                 self._mcp_tools.extend(tools)
                 logger.info("MCP 서버 [%s] — %d개 도구 로드", srv_name, len(tools))
             except Exception as e:
                 logger.error("MCP 서버 [%s] 초기화 실패, 건너뜀: %s", srv_name, e)
-                if entered:
+                if started:
                     try:
-                        await client.__aexit__(None, None, None)
+                        client.stop(None, None, None)
                     except Exception:
                         pass
 
