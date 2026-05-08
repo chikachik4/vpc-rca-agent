@@ -11,7 +11,7 @@ RCA_PROMPT = """
 당신은 AWS 인프라 증거 기반 RCA 전문가입니다. 반드시 다음 규칙을 따르세요:
 1. 범위: VPC1(EKS)과 VPC3(공유 허브) 리소스만 조회
 2. 조사 순서: CloudWatch 알람/메트릭 → EKS 이벤트/로그 → CloudTrail 변경 이력
-3. VPC3 데이터(Prometheus/ArgoCD/OpenSearch)가 필요하면 반드시 "__SPRINT__:{구체적 쿼리}" 형식으로 한 줄 삽입
+3. VPC3 데이터(Prometheus/ArgoCD/OpenSearch/Tempo)가 필요하면 반드시 "__SPRINT__:{구체적 쿼리}" 형식으로 한 줄 삽입
 4. 출력 포맷 (한국어):
    [증상 요약] ...
    [영향 범위] ...
@@ -21,6 +21,7 @@ RCA_PROMPT = """
    [권장 조치] ...
 5. Read-only 원칙: 어떤 리소스도 수정하지 않음
 """
+
 
 class RCAAgent:
     def __init__(self):
@@ -33,18 +34,14 @@ class RCAAgent:
         self._sprint_subscription_task = None
 
     async def _init_mcp(self):
-        # mcp_config.json 로드
         with open(settings.MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
-        
+
         for name, srv in config.get("mcpServers", {}).items():
             env = srv.get("env", {}).copy()
-            # 환경변수 치환 (${EKS_CLUSTER_NAME} 등)
             for k, v in env.items():
                 if v == "${EKS_CLUSTER_NAME}":
                     env[k] = settings.EKS_CLUSTER_NAME
-            
-            # 기본 AWS 설정 주입
             env.setdefault("AWS_REGION", settings.AWS_REGION)
 
             client = MCPClient(lambda srv=srv, env=env: StdioServerParameters(
@@ -58,7 +55,7 @@ class RCAAgent:
             await client.__aenter__()
             tools = await client.list_tools()
             self._mcp_tools.extend(tools)
-            print(f"📦 [RCA] Loaded {len(tools)} tools from MCP server")
+            print(f"📦 [RCA] MCP 서버에서 {len(tools)}개 도구 로드")
 
         self.agent = Agent(
             model=BedrockModel(
@@ -70,8 +67,11 @@ class RCAAgent:
         )
 
     async def handle_plan(self, data: dict):
-        await redis_client.publish("rca.output",
-            {"sender": "RCA", "text": "🔍 증거 수집 시작..."})
+        await redis_client.publish("rca.output", {
+            "type": "status",
+            "sender": "RCA",
+            "text": "🔍 증거 수집 시작...",
+        })
 
         result = str(await asyncio.to_thread(self.agent, data["plan"]))
 
@@ -79,21 +79,21 @@ class RCAAgent:
             before, rest = result.split("__SPRINT__:", 1)
             sprint_query = rest.strip().splitlines()[0]
 
-            # Race Condition 방지: Publish 전에 Event Clear
             self._sprint_event.clear()
             self._sprint_result = ""
             await redis_client.publish("rca.sprint", {"query": sprint_query})
-            await redis_client.publish("rca.output",
-                {"sender": "RCA", "text": f"⏳ Sprint 조회 요청: {sprint_query}"})
+            await redis_client.publish("rca.output", {
+                "type": "status",
+                "sender": "RCA",
+                "text": f"⏳ Sprint 조회 요청: {sprint_query}",
+            })
 
-            # Sprint 결과 대기
             try:
                 await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
             except asyncio.TimeoutError:
-                print("⚠️ [RCA] Sprint request timed out")
+                print("⚠️ [RCA] Sprint 타임아웃")
                 self._sprint_result = "조회 타임아웃 발생"
 
-            # Sprint 결과 포함해 최종 분석
             final_prompt = (
                 f"{data['plan']}\n\n"
                 f"[Sprint 조회 결과]\n{self._sprint_result}\n\n"
@@ -101,7 +101,12 @@ class RCAAgent:
             )
             result = str(await asyncio.to_thread(self.agent, final_prompt))
 
-        await redis_client.publish("rca.output", {"sender": "RCA", "text": result})
+        # 최종 결과는 type="report" — Dispatcher가 파일+Slack 발송
+        await redis_client.publish("rca.output", {
+            "type": "report",
+            "sender": "RCA",
+            "text": result,
+        })
 
     async def handle_sprint_result(self, data: dict):
         self._sprint_result = data.get("result", "")
@@ -110,6 +115,8 @@ class RCAAgent:
     async def start(self):
         await self._init_mcp()
         print("🧠  [RCA] rca.plan 및 rca.sprint.result 대기 중...")
-        self._plan_subscription_task = await redis_client.subscribe("rca.plan", self.handle_plan)
-        self._sprint_subscription_task = await redis_client.subscribe("rca.sprint.result", self.handle_sprint_result)
+        self._plan_subscription_task = await redis_client.subscribe(
+            "rca.plan", self.handle_plan)
+        self._sprint_subscription_task = await redis_client.subscribe(
+            "rca.sprint.result", self.handle_sprint_result)
         await asyncio.Future()
