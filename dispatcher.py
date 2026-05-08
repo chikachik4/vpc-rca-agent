@@ -1,10 +1,12 @@
 import asyncio
-import httpx
 from datetime import datetime
 from pathlib import Path
-from infrastructure.redis_client import redis_client
+
+import httpx
+
 from core.config import settings
 from core.logging import get_logger
+from infrastructure.redis_client import redis_client
 
 logger = get_logger(__name__)
 

@@ -1,13 +1,14 @@
 import asyncio
 import sys
+
 from agents.architect import ArchitectAgent
 from agents.rca import RCAAgent
 from agents.sprint import SprintAgent
-from infrastructure.redis_client import redis_client
-from observer import ObserverLoop
-from dispatcher import ReportDispatcher
 from core.config import settings
 from core.logging import configure_logging, get_logger
+from dispatcher import ReportDispatcher
+from infrastructure.redis_client import redis_client
+from observer import ObserverLoop
 
 
 async def main():

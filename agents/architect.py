@@ -1,10 +1,12 @@
 import asyncio
 import json
+
 from strands import Agent
 from strands.models import BedrockModel
-from infrastructure.redis_client import redis_client
+
 from core.config import settings
 from core.logging import get_logger
+from infrastructure.redis_client import redis_client
 
 logger = get_logger(__name__)
 

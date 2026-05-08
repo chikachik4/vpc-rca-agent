@@ -1,12 +1,14 @@
-import json
 import asyncio
+import json
+
+from mcp import StdioServerParameters
 from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
-from mcp import StdioServerParameters
-from infrastructure.redis_client import redis_client
+
 from core.config import settings
 from core.logging import get_logger
+from infrastructure.redis_client import redis_client
 
 logger = get_logger(__name__)
 

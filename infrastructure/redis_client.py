@@ -1,7 +1,9 @@
-import json
 import asyncio
-from typing import Callable, Any, Coroutine
-from redis.asyncio import Redis, ConnectionPool
+import json
+from typing import Any, Callable, Coroutine
+
+from redis.asyncio import ConnectionPool, Redis
+
 from core.config import settings
 from core.logging import get_logger
 

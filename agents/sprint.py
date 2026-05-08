@@ -1,13 +1,15 @@
 import asyncio
+
 from strands import Agent
 from strands.models import BedrockModel
-from tools.prometheus import query_prometheus
-from tools.argocd import list_argocd_apps, get_argocd_app_status
-from tools.opensearch import search_logs, vector_search
-from tools.tempo import query_tempo_traces, get_tempo_trace
-from infrastructure.redis_client import redis_client
+
 from core.config import settings
 from core.logging import get_logger
+from infrastructure.redis_client import redis_client
+from tools.argocd import get_argocd_app_status, list_argocd_apps
+from tools.opensearch import search_logs, vector_search
+from tools.prometheus import query_prometheus
+from tools.tempo import get_tempo_trace, query_tempo_traces
 
 logger = get_logger(__name__)
 
