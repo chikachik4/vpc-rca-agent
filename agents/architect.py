@@ -1,4 +1,5 @@
 import asyncio
+import json
 from strands import Agent
 from strands.models import BedrockModel
 from infrastructure.redis_client import redis_client
@@ -59,6 +60,7 @@ class ArchitectAgent:
                 "mode": "beginner",
                 "symptom": data.get("text", "알 수 없는 장애"),
                 "timerange": "last 1h",
+                "vpc_scope": ["vpc1", "vpc3"],
                 "investigation_steps": ["CloudWatch 확인"],
                 "priority_hypothesis": "분석 실패로 인한 기본 조사"
             }
