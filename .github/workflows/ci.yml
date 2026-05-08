@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - gemini
+      - codex
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Bytecode compile check
+        run: uv run python -m compileall .
+
+      - name: Import smoke check
+        run: |
+          uv run python -c "import agents.architect, agents.rca, agents.sprint"
+          uv run python -c "import tools.prometheus, tools.argocd, tools.opensearch"
+          uv run python -c "import infrastructure.redis_client, core.config"
