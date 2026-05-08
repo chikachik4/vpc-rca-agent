@@ -13,46 +13,82 @@ from infrastructure.redis_client import redis_client
 
 logger = get_logger(__name__)
 
-RCA_PROMPT_BASE = """
-당신은 AWS 인프라 증거 기반 RCA 전문가입니다. 반드시 다음 규칙을 따르세요:
-1. 범위: VPC1(EKS)과 VPC3(공유 모니터링 허브) 리소스만 조회
-2. 조사 순서: CloudWatch 알람/메트릭 → Application Signals(트레이싱) → EKS 이벤트/로그 → CloudTrail 변경 이력
-3. VPC3 Prometheus 데이터가 필요하면 반드시 "__SPRINT__:{구체적 쿼리}" 형식으로 한 줄 삽입
-4. Read-only 원칙: 어떤 리소스도 수정하지 않음
 
-[핵심 모니터링 지표 및 장애 판단 기준]
-- Redis & DB 연쇄 장애 패턴:
-    - Redis Miss: 'rate(cache_gets_total{result="miss", job="vpc1-backend"}[2m])' 급증 시 의심.
-    - DB Connection: 'avg(hikaricp_connections_active{job="vpc1-backend"})' 15개 초과 시 Redis 장애로 인한 DB 부하 전이 판단.
-    - Response Time: 'http_server_requests_seconds' 평균 0.1s(100ms) 초과 시 지연 상황.
-- 에러율: 'job:envoy_error_rate:rate5m' 0.05(5%) 초과 시 인프라/네트워크 장애 가능성 높음.
+def _expand_mcp_value(value: str) -> str:
+    replacements = {
+        "${AWS_REGION}": settings.AWS_REGION,
+        "${EKS_CLUSTER_NAME}": settings.EKS_CLUSTER_NAME,
+    }
+    for placeholder, replacement in replacements.items():
+        value = value.replace(placeholder, replacement)
+    return value
+
+
+RCA_PROMPT_BASE = """
+You are a DevOps RCA agent for the Bookjjeok AWS environment. Your job is not
+to confirm a pre-written rule. Your job is to reduce the root-cause search
+space by forming hypotheses, collecting evidence, rejecting weak hypotheses,
+and reporting the most likely cause with supporting facts.
+
+[Environment topology]
+- VPC1 runs the application workload on EKS.
+- The Redis used by the VPC1 backend is an EC2 Redis instance, not ElastiCache.
+- VPC3 is the shared observability and platform hub.
+- VPC3 contains RDS, OpenSearch, ArgoCD, Prometheus, and Tempo.
+- Prometheus and Tempo show application symptoms and request paths.
+- OpenSearch shows application and platform logs.
+- ArgoCD shows recent deployment/config changes.
+- AWS MCP tools show AWS-side evidence such as EKS state, EC2 instance state,
+  CloudWatch metrics/logs, and CloudTrail changes.
+- Use AWS MCP Server as the single AWS API/documentation access point. Keep the
+  AWS tool surface small; do not ask for unused service-specific MCP servers.
+
+[Investigation rules]
+1. Stay within VPC1 and VPC3 resources.
+2. Use read-only evidence only. Never modify AWS, Kubernetes, ArgoCD, Redis, or DB resources.
+3. Treat Observer input as a symptom, not as a diagnosis.
+4. Do not assume Redis is the root cause just because Redis-related symptoms exist.
+5. For EC2 Redis incidents, explicitly check AWS/EC2 evidence, application logs,
+   request latency, DB pressure, and recent deployment/config changes.
+6. Prefer a small set of strong hypotheses over many generic possibilities.
+7. If VPC3 Prometheus, Tempo, OpenSearch, or ArgoCD data is needed, request it
+   with a single line in this exact format:
+   __SPRINT__:{specific query or evidence request}
+
+[Default hypothesis set]
+- Recent deployment/configuration change in ArgoCD.
+- VPC1 EKS pod/node instability.
+- VPC1 EC2 Redis instance stopped, unhealthy, unreachable, or overloaded.
+- VPC3 RDS pressure caused by cache fallback or application behavior.
+- Network/security path issue between VPC1 backend and VPC3/shared services.
+- Application-level regression visible in logs or traces.
 """
 
 
 MODE_INSTRUCTIONS = {
     "beginner": """
-[Beginner 모드 지침]
-- 어려운 IT 기술 용어를 사용할 때는 반드시 쉬운 설명을 덧붙이세요.
-- 장애 원인을 비유를 들어 설명하면 좋습니다.
-- 조치 가이드는 명령어를 그대로 복사해서 쓸 수 있을 정도로 아주 상세하게 작성하세요.
+[Beginner mode]
+- Explain technical terms in simple language.
+- Clearly separate symptom, likely cause, and recommended action.
+- Make the action guide concrete enough to follow.
 """,
     "expert": """
-[Expert 모드 지침]
-- 핵심 메트릭 수치, 에러 로그 원문, CloudTrail API 호출 이력을 가감 없이 보고하세요.
-- 불필요한 서술은 줄이고 기술적 사실 위주로 간결하게 작성하세요.
-- 아키텍처 관점에서의 근본 원인(Deep Root Cause)을 제시하세요.
+[Expert mode]
+- Report concrete metric values, log evidence, trace evidence, and change events.
+- Keep narrative short and focus on evidence quality.
+- State which hypotheses were rejected and why.
 """,
 }
 
 RCA_OUTPUT_FORMAT = """
-[출력 포맷 (한국어)]
-1. [증상 요약] ...
-2. [영향 범위] ...
-3. [타임라인] (지표 변화 및 CloudTrail 변경 이력 포함)
-4. [가설 A] ... 신뢰도: XX%
-5. [가설 B] ... 신뢰도: XX% (최소 2개 가설 필수)
-6. [최종 결론] (가설 검증 결과 요약)
-7. [권장 조치] (단기/장기 분리)
+[Output format in Korean]
+1. [증상 요약]
+2. [영향 범위]
+3. [타임라인]
+4. [증거 요약] Prometheus/Tempo/OpenSearch/ArgoCD/AWS 증거를 구분
+5. [가설 검증] 남긴 가설과 버린 가설을 함께 설명
+6. [가장 가능성 높은 원인] 신뢰도와 근거
+7. [권장 조치] 단기 복구와 재발 방지 분리
 """
 
 
@@ -81,15 +117,19 @@ class RCAAgent:
             return
 
         for srv_name, srv in config.get("mcpServers", {}).items():
-            env = srv.get("env", {}).copy()
-            for k, v in env.items():
-                if v == "${EKS_CLUSTER_NAME}":
-                    env[k] = settings.EKS_CLUSTER_NAME
+            env = {
+                key: _expand_mcp_value(value) if isinstance(value, str) else value
+                for key, value in srv.get("env", {}).items()
+            }
             env.setdefault("AWS_REGION", settings.AWS_REGION)
+            args = [
+                _expand_mcp_value(arg) if isinstance(arg, str) else arg
+                for arg in srv["args"]
+            ]
 
-            client = MCPClient(lambda srv=srv, env=env: stdio_client(StdioServerParameters(
+            client = MCPClient(lambda srv=srv, env=env, args=args: stdio_client(StdioServerParameters(
                 command=srv["command"],
-                args=srv["args"],
+                args=args,
                 env=env,
             )))
             try:

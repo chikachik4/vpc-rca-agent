@@ -87,14 +87,20 @@ RCA 리포트 Slack 알림은 Alertmanager의 `slack_api_url`과 별개로 앱�
 
 `mcp_config.json`에서 사용할 MCP 서버를 정의합니다.
 
-현재 기본 설정:
+현재 기본 설정은 managed AWS MCP Server 하나만 사용합니다.
 
-- `awslabs.cloudwatch-mcp-server`
-- `awslabs.cloudwatch-application-signals-mcp-server`
-- `awslabs.eks-mcp-server`
-- `awslabs.cloudtrail-mcp-server`
+- `mcp-proxy-for-aws@latest`
+- `https://aws-mcp.us-east-1.api.aws/mcp`
+- metadata `AWS_REGION=${AWS_REGION}`
 
-서버에서 MCP 초기화가 실패하면 앱은 MCP 도구 없이 계속 실행되지만, RCA의 AWS 증거 수집 능력이 제한됩니다. 특히 `uvx`로 실행되는 MCP 패키지가 registry에 존재하는지와 IAM 권한, `EKS_CLUSTER_NAME`, `AWS_REGION` 값을 먼저 확인하세요.
+AWS MCP Server는 작은 고정 도구 집합으로 AWS API와 최신 AWS 문서 접근을 제공합니다. RCA agent에는 서비스별 MCP를 많이 붙이지 않고, 실제 사용하는 AWS 리소스는 AWS MCP Server와 IAM 권한으로 조회합니다.
+
+이 프로젝트의 기본 토폴로지:
+
+- `vpc1`: EKS 애플리케이션 워크로드, EC2 Redis 인스턴스
+- `vpc3`: RDS, OpenSearch, ArgoCD, Prometheus, Tempo
+
+서버에서 MCP 초기화가 실패하면 앱은 MCP 도구 없이 계속 실행되지만, AWS-side 증거 수집 능력이 제한됩니다. 이 경우 `uv`, `mcp-proxy-for-aws`, IAM 권한, `AWS_REGION` 값을 먼저 확인하세요.
 
 ## 실행
 
