@@ -2,6 +2,7 @@ import asyncio
 import json
 
 from mcp import StdioServerParameters
+from mcp.client.stdio import stdio_client
 from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
@@ -86,11 +87,11 @@ class RCAAgent:
                     env[k] = settings.EKS_CLUSTER_NAME
             env.setdefault("AWS_REGION", settings.AWS_REGION)
 
-            client = MCPClient(lambda srv=srv, env=env: StdioServerParameters(
+            client = MCPClient(lambda srv=srv, env=env: stdio_client(StdioServerParameters(
                 command=srv["command"],
                 args=srv["args"],
                 env=env,
-            ))
+            )))
             started = False
             try:
                 await asyncio.to_thread(client.start)
