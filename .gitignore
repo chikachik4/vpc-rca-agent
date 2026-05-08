@@ -25,3 +25,6 @@ build/
 # IDE/editor
 .idea/
 .vscode/
+
+# Agent harness logs (local only)
+.agents-dev/log/

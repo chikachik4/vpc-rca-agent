@@ -26,9 +26,16 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
 
-      - name: Sync dependencies
-        run: uv sync --frozen
+      - name: Sync dependencies (including dev)
+        run: |
+          uv lock
+          uv sync --frozen --group dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
 
       - name: Bytecode compile check
         run: uv run python -m compileall .
@@ -37,5 +44,8 @@ jobs:
         run: |
           uv run python -c "import agents.architect, agents.rca, agents.sprint"
           uv run python -c "import tools.prometheus, tools.argocd, tools.opensearch, tools.tempo"
-          uv run python -c "import infrastructure.redis_client, core.config"
+          uv run python -c "import infrastructure.redis_client, core.config, core.logging"
           uv run python -c "import observer, dispatcher"
+
+      - name: Unit tests
+        run: uv run pytest -v --tb=short
