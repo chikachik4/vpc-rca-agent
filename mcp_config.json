@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "cloudwatch": {
+      "command": "uvx", "args": ["awslabs.cloudwatch-mcp-server@latest"]
+    },
+    "cloudwatch-app-signals": {
+      "command": "uvx", "args": ["awslabs.cloudwatch-application-signals-mcp-server@latest"]
+    },
+    "eks": {
+      "command": "uvx", "args": ["awslabs.eks-mcp-server@latest"],
+      "env": {"EKS_CLUSTER_NAME": "${EKS_CLUSTER_NAME}"}
+    },
+    "cloudtrail": {
+      "command": "uvx", "args": ["awslabs.cloudtrail-mcp-server@latest"]
+    }
+  }
+}
