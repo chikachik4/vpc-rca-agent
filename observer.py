@@ -1,4 +1,5 @@
 import asyncio
+import math
 
 import httpx
 
@@ -14,7 +15,7 @@ def _tls():
 
 
 class ObserverLoop:
-    """Prometheus를 주기적으로 폴링하여 임계값 초과 시 rca.input에 이벤트를 발행합니다."""
+    """Poll broad service health signals and let RCAAgent narrow the root cause."""
 
     @property
     def QUERIES(self):
@@ -25,71 +26,79 @@ class ObserverLoop:
                 "promql": 'sum(rate(container_cpu_usage_seconds_total{id="/",cluster="vpc1"}[2m]))',
                 "threshold": s.CPU_ALERT_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "VPC1 CPU 사용량 이상: {value:.2f} cores (임계값 {threshold})",
+                "symptom_template": "VPC1 CPU usage spike: {value:.2f} cores (threshold {threshold})",
             },
             {
                 "name": "pod_restart",
                 "promql": 'sum(increase(kube_pod_container_status_restarts_total{cluster="vpc1"}[5m]))',
                 "threshold": s.POD_RESTART_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "VPC1 Pod 재시작 급증: {value:.0f}회/5분 (임계값 {threshold})",
+                "symptom_template": "VPC1 pod restarts increased: {value:.0f}/5m (threshold {threshold})",
             },
             {
-                "name": "redis_miss_rate",
-                "promql": 'rate(cache_gets_total{result="miss",job="vpc1-backend"}[2m])',
-                "threshold": s.REDIS_MISS_RATE_THRESHOLD,
+                "name": "backend_warn_error_logs",
+                "promql": (
+                    'sum(rate(logback_events_total{job="vpc1-backend",'
+                    'level=~"warn|WARN|error|ERROR"}[2m]))'
+                ),
+                "threshold": 0.05,
                 "compare": "gt",
-                "symptom_template": "VPC1 Redis Cache Miss 급증: {value:.3f} req/s (임계값 {threshold})",
+                "symptom_template": "VPC1 backend WARN/ERROR logs increased: {value:.3f} events/s",
             },
             {
                 "name": "db_connections",
                 "promql": 'avg(hikaricp_connections_active{job="vpc1-backend"})',
                 "threshold": s.DB_CONN_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "VPC1 DB 연결 과부하: {value:.0f}개 활성 (임계값 {threshold})",
+                "symptom_template": "VPC3 RDS connection pressure from VPC1 backend: {value:.0f} active (threshold {threshold})",
             },
             {
                 "name": "response_time",
                 "promql": (
-                    'avg(rate(http_server_requests_seconds_sum{job="vpc1-backend"}[2m])'
-                    ' / rate(http_server_requests_seconds_count{job="vpc1-backend"}[2m]))'
+                    'sum(rate(http_server_requests_seconds_sum{job="vpc1-backend"}[2m]))'
+                    ' / clamp_min(sum(rate(http_server_requests_seconds_count{job="vpc1-backend"}[2m])), 0.001)'
                 ),
                 "threshold": s.RESPONSE_TIME_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "VPC1 응답 지연: {value:.3f}s (임계값 {threshold}s)",
+                "symptom_template": "VPC1 backend response latency increased: {value:.3f}s (threshold {threshold}s)",
             },
             {
                 "name": "envoy_error_rate",
                 "promql": "job:envoy_error_rate:rate5m",
                 "threshold": s.ERROR_RATE_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "Envoy 에러율 급증: {value:.1%} (임계값 {threshold:.0%})",
+                "symptom_template": "Ingress/service mesh error rate spike: {value:.1%} (threshold {threshold:.0%})",
             },
         ]
 
     async def _query(self, promql: str) -> float | None:
-        """None 반환은 Prometheus 자체가 응답 불가 상태임을 의미합니다."""
+        """Return 0.0 for empty/non-finite data and None when Prometheus itself fails."""
         try:
             async with httpx.AsyncClient(verify=_tls()) as client:
-                r = await client.get(
+                response = await client.get(
                     f"{settings.PROMETHEUS_URL}/api/v1/query",
                     params={"query": promql},
                     timeout=settings.REQUEST_TIMEOUT_SECONDS,
                 )
-                r.raise_for_status()
-                data = r.json()
+                response.raise_for_status()
+                data = response.json()
                 result = data["data"]["result"]
                 if not result:
                     return 0.0
-                return float(result[0]["value"][1])
-        except KeyError as e:
-            logger.warning("Prometheus 응답 구조 파싱 실패 (%s): %s", promql[:60], e)
+
+                value = float(result[0]["value"][1])
+                if math.isnan(value) or math.isinf(value):
+                    logger.warning("Prometheus query returned non-finite value (%s): %s", promql[:80], value)
+                    return 0.0
+                return value
+        except KeyError as exc:
+            logger.warning("Prometheus response parse failed (%s): %s", promql[:80], exc)
             return None
-        except httpx.HTTPStatusError as e:
-            logger.error("Prometheus HTTP 오류 (%s): %s", promql[:60], e)
+        except httpx.HTTPStatusError as exc:
+            logger.error("Prometheus HTTP error (%s): %s", promql[:80], exc)
             return None
-        except Exception as e:
-            logger.error("Prometheus 쿼리 실패 (%s): %s", promql[:60], e)
+        except Exception as exc:
+            logger.error("Prometheus query failed (%s): %s", promql[:80], exc)
             return None
 
     def _breached(self, value: float, threshold: float, compare: str) -> bool:
@@ -100,21 +109,40 @@ class ObserverLoop:
         return False
 
     async def start(self):
-        logger.info("Prometheus 감시 시작 (간격: %ds, 쿼리 수: %d)",
-                    settings.OBSERVER_INTERVAL_SEC, len(self.QUERIES))
+        logger.info(
+            "Prometheus observer started (interval=%ds, queries=%d)",
+            settings.OBSERVER_INTERVAL_SEC,
+            len(self.QUERIES),
+        )
         while True:
-            for q in self.QUERIES:
-                value = await self._query(q["promql"])
+            for query in self.QUERIES:
+                value = await self._query(query["promql"])
                 if value is None:
                     continue
-                if self._breached(value, q["threshold"], q["compare"]):
-                    symptom = q["symptom_template"].format(
-                        value=value, threshold=q["threshold"]
+
+                breached = self._breached(value, query["threshold"], query["compare"])
+                logger.info(
+                    "Observer query [%s]: value=%s threshold=%s compare=%s breached=%s",
+                    query["name"],
+                    value,
+                    query["threshold"],
+                    query["compare"],
+                    breached,
+                )
+
+                if breached:
+                    symptom = query["symptom_template"].format(
+                        value=value,
+                        threshold=query["threshold"],
                     )
-                    logger.warning("이상 감지 [%s]: %s", q["name"], symptom)
-                    await redis_client.publish("rca.input", {
-                        "source": "auto",
-                        "text": symptom,
-                        "metric": {"name": q["name"], "value": value},
-                    })
+                    logger.warning("Signal breached [%s]: %s", query["name"], symptom)
+                    await redis_client.publish(
+                        "rca.input",
+                        {
+                            "source": "auto",
+                            "text": symptom,
+                            "metric": {"name": query["name"], "value": value},
+                        },
+                    )
+
             await asyncio.sleep(settings.OBSERVER_INTERVAL_SEC)
