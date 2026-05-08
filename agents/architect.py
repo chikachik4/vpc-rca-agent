@@ -60,6 +60,7 @@ def _normalize_plan(plan: dict, fallback_symptom: str) -> dict:
 class ArchitectAgent:
     def __init__(self):
         self._subscription_task = None
+        self._is_planning = False
         self.agent = Agent(
             model=BedrockModel(
                 model_id=settings.LLM_MODEL_EXPERT,
@@ -69,48 +70,63 @@ class ArchitectAgent:
         )
 
     async def handle(self, data: dict):
+        if self._is_planning:
+            await redis_client.publish(
+                "rca.output",
+                {
+                    "type": "status",
+                    "sender": "Architect",
+                    "text": "[Architect] previous plan generation still running, skipping this trigger",
+                },
+            )
+            return
+
+        self._is_planning = True
         source = data.get("source", "manual")
-        await redis_client.publish(
-            "rca.output",
-            {
-                "type": "status",
-                "sender": "Architect",
-                "text": f"[Architect] Building investigation plan... (trigger: {source})",
-            },
-        )
-
-        raw_plan = str(await asyncio.to_thread(self.agent, data.get("text", "")))
-
         try:
-            clean = raw_plan.strip()
-            if clean.startswith("```"):
-                clean = clean.split("```")[1]
-                if clean.startswith("json"):
-                    clean = clean[4:].strip()
-            parsed = json.loads(clean)
-        except Exception as exc:
-            logger.error("Architect JSON parse failed: %s", exc)
-            parsed = {}
+            await redis_client.publish(
+                "rca.output",
+                {
+                    "type": "status",
+                    "sender": "Architect",
+                    "text": f"[Architect] Building investigation plan... (trigger: {source})",
+                },
+            )
 
-        plan_json = _normalize_plan(parsed, str(data.get("text", "")))
-        plan_str = json.dumps(plan_json, ensure_ascii=False)
+            raw_plan = str(await asyncio.to_thread(self.agent, data.get("text", "")))
 
-        await redis_client.publish(
-            "rca.plan",
-            {
-                "plan": plan_str,
-                "mode": plan_json["mode"],
-                "original": data.get("text", ""),
-            },
-        )
-        await redis_client.publish(
-            "rca.output",
-            {
-                "type": "status",
-                "sender": "Architect",
-                "text": f"[Architect] Plan ready ({plan_json['mode']})\n{plan_str}",
-            },
-        )
+            try:
+                clean = raw_plan.strip()
+                if clean.startswith("```"):
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:].strip()
+                parsed = json.loads(clean)
+            except Exception as exc:
+                logger.error("Architect JSON parse failed: %s", exc)
+                parsed = {}
+
+            plan_json = _normalize_plan(parsed, str(data.get("text", "")))
+            plan_str = json.dumps(plan_json, ensure_ascii=False)
+
+            await redis_client.publish(
+                "rca.plan",
+                {
+                    "plan": plan_str,
+                    "mode": plan_json["mode"],
+                    "original": data.get("text", ""),
+                },
+            )
+            await redis_client.publish(
+                "rca.output",
+                {
+                    "type": "status",
+                    "sender": "Architect",
+                    "text": f"[Architect] Plan ready ({plan_json['mode']})\n{plan_str}",
+                },
+            )
+        finally:
+            self._is_planning = False
 
     async def start(self):
         logger.info("[Architect] waiting on rca.input...")

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 
 from mcp import StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -32,9 +33,8 @@ def _has_insufficient_evidence_marker(text: str) -> bool:
         "permission denied",
         "insufficient",
         "failed to fetch",
-        "조회 타임아웃",
-        "권한 부족",
-        "데이터 획득 실패",
+        "validation_failures",
+        "invalid type",
     ]
     lowered = text.lower()
     return any(marker in lowered for marker in markers)
@@ -43,24 +43,24 @@ def _has_insufficient_evidence_marker(text: str) -> bool:
 def _build_insufficient_evidence_report(plan: str, sprint_result: str) -> str:
     return (
         "[증거 부족 RCA 상태 보고]\n"
-        "1. [상태] 현재는 근거 데이터가 충분하지 않아 확정 RCA를 생성하지 않습니다.\n"
-        "2. [이유] Sprint/MCP 조회에서 타임아웃 또는 권한 문제로 핵심 증거 확보에 실패했습니다.\n"
+        "1. [상태] 근거 데이터가 부족하여 확정 RCA를 생성하지 않습니다.\n"
+        "2. [이유] Sprint/MCP 조회에서 타임아웃, 권한, 또는 파라미터 검증 오류가 발생했습니다.\n"
         "3. [수집된 단서]\n"
-        f"- 계획 입력: {plan[:600]}\n"
-        f"- Sprint 결과: {sprint_result[:600]}\n"
+        f"- 계획 입력: {plan[:500]}\n"
+        f"- Sprint 결과: {sprint_result[:500]}\n"
         "4. [필요한 추가 증거]\n"
         "- VPC1 EKS 이벤트/파드 상태\n"
-        "- VPC1 EC2 Redis 인스턴스 상태와 CloudWatch 메트릭\n"
+        "- VPC1 EC2 Redis 인스턴스 상태 및 CloudWatch 지표\n"
         "- VPC3 OpenSearch 로그 및 ArgoCD 최근 변경 이력\n"
         "- Prometheus 핵심 지표(응답시간, DB 연결, 에러율)\n"
         "5. [다음 액션]\n"
-        "- 권한/연결 문제를 먼저 해결한 뒤 동일 타임윈도우로 재수집\n"
-        "- 재수집 후 가설 축소형 RCA 재실행\n"
+        "- 권한/연결/파라미터 형식 문제를 해결한 뒤 같은 타임윈도우로 재수집\n"
+        "- 재수집 후 가설 축소형 RCA를 재실행\n"
     )
 
 
 RCA_PROMPT_BASE = """
-You are a DevOps RCA agent for the Bookjjeok AWS environment.
+You are a DevOps RCA agent for Bookjjeok AWS.
 
 [Environment topology]
 - VPC1 runs workload on EKS.
@@ -68,13 +68,15 @@ You are a DevOps RCA agent for the Bookjjeok AWS environment.
 - VPC3 contains RDS, OpenSearch, ArgoCD, Prometheus, and Tempo.
 
 [Rules]
-1. Stay inside VPC1/VPC3 scope only.
+1. Stay inside VPC1/VPC3 only.
 2. Read-only evidence only.
-3. Treat incoming symptom as trigger, not root cause.
+3. Treat incoming symptom as trigger, not diagnosis.
 4. Build and reduce hypotheses from evidence.
 5. If VPC3 data is needed, request exactly one Sprint line:
    __SPRINT__:{specific query}
-6. If evidence is insufficient, do not hallucinate a final root cause.
+6. If evidence is insufficient, do not output a confident final root cause.
+7. For aws___call_aws time parameters (for example --start-time / --end-time),
+   always pass Unix epoch integers in seconds, not ISO strings.
 """
 
 MODE_INSTRUCTIONS = {
@@ -111,17 +113,19 @@ class RCAAgent:
         self._sprint_result: str = ""
         self._plan_subscription_task = None
         self._sprint_subscription_task = None
+        self._is_running = False
+        self._last_started_at: datetime | None = None
 
     async def _init_mcp(self):
         try:
             with open(settings.MCP_CONFIG_PATH, "r", encoding="utf-8") as file:
                 config = json.load(file)
         except FileNotFoundError:
-            logger.error("MCP config file not found: %s — continuing without MCP", settings.MCP_CONFIG_PATH)
+            logger.error("MCP config file not found: %s - continuing without MCP", settings.MCP_CONFIG_PATH)
             self._build_agent("beginner")
             return
         except json.JSONDecodeError as exc:
-            logger.error("MCP config parse failed: %s — continuing without MCP", exc)
+            logger.error("MCP config parse failed: %s - continuing without MCP", exc)
             self._build_agent("beginner")
             return
 
@@ -174,68 +178,83 @@ class RCAAgent:
             return ""
 
     async def handle_plan(self, data: dict):
-        raw_mode = data.get("mode", "beginner")
-        mode = raw_mode if raw_mode in MODE_INSTRUCTIONS else "beginner"
-
-        plan = data.get("plan", "").strip()
-        if not plan:
-            plan = json.dumps(
+        if self._is_running:
+            await redis_client.publish(
+                "rca.output",
                 {
-                    "mode": mode,
-                    "symptom": data.get("original", "unknown incident"),
-                    "timerange": "last 1h",
-                    "vpc_scope": ["vpc1", "vpc3"],
-                    "investigation_steps": ["Check CloudWatch", "Check EKS events"],
-                    "priority_hypothesis": "fallback investigation due to empty plan",
+                    "type": "status",
+                    "sender": "RCA",
+                    "text": "[RCA] previous investigation still running, skipping this trigger",
                 },
-                ensure_ascii=False,
             )
-            logger.warning("Empty plan received; fallback plan generated")
+            return
 
-        self._build_agent(mode)
+        self._is_running = True
+        self._last_started_at = datetime.now(timezone.utc)
+        try:
+            raw_mode = data.get("mode", "beginner")
+            mode = raw_mode if raw_mode in MODE_INSTRUCTIONS else "beginner"
 
-        await redis_client.publish(
-            "rca.output",
-            {"type": "status", "sender": "RCA", "text": f"[RCA] Evidence collection started ({mode})..."},
-        )
-
-        first_pass = str(await asyncio.to_thread(self.agent, plan))
-        sprint_failed = False
-        result = first_pass
-
-        if "__SPRINT__:" in first_pass:
-            sprint_query = self._extract_sprint_query(first_pass)
-            if not sprint_query:
-                sprint_failed = True
-                self._sprint_result = "empty sprint query"
-            else:
-                self._sprint_event.clear()
-                self._sprint_result = ""
-                await redis_client.publish("rca.sprint", {"query": sprint_query})
-                await redis_client.publish(
-                    "rca.output",
-                    {"type": "status", "sender": "RCA", "text": f"[RCA] Sprint query requested: {sprint_query}"},
+            plan = data.get("plan", "").strip()
+            if not plan:
+                plan = json.dumps(
+                    {
+                        "mode": mode,
+                        "symptom": data.get("original", "unknown incident"),
+                        "timerange": "last 1h",
+                        "vpc_scope": ["vpc1", "vpc3"],
+                        "investigation_steps": ["Check CloudWatch", "Check EKS events"],
+                        "priority_hypothesis": "fallback investigation due to empty plan",
+                    },
+                    ensure_ascii=False,
                 )
-                try:
-                    await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
-                    logger.info("Sprint result received")
-                except asyncio.TimeoutError:
-                    logger.warning("Sprint response timeout (15s)")
+                logger.warning("Empty plan received; fallback plan generated")
+
+            self._build_agent(mode)
+            await redis_client.publish(
+                "rca.output",
+                {"type": "status", "sender": "RCA", "text": f"[RCA] Evidence collection started ({mode})..."},
+            )
+
+            first_pass = str(await asyncio.to_thread(self.agent, plan))
+            sprint_failed = False
+            result = first_pass
+
+            if "__SPRINT__:" in first_pass:
+                sprint_query = self._extract_sprint_query(first_pass)
+                if not sprint_query:
                     sprint_failed = True
-                    self._sprint_result = "조회 타임아웃 발생"
-
-                if not sprint_failed:
-                    final_prompt = (
-                        f"{plan}\n\n"
-                        f"[Sprint result]\n{self._sprint_result}\n\n"
-                        "Use only evidence-backed reasoning. If evidence is insufficient, state that explicitly."
+                    self._sprint_result = "empty sprint query"
+                else:
+                    self._sprint_event.clear()
+                    self._sprint_result = ""
+                    await redis_client.publish("rca.sprint", {"query": sprint_query})
+                    await redis_client.publish(
+                        "rca.output",
+                        {"type": "status", "sender": "RCA", "text": f"[RCA] Sprint query requested: {sprint_query}"},
                     )
-                    result = str(await asyncio.to_thread(self.agent, final_prompt))
+                    try:
+                        await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
+                        logger.info("Sprint result received")
+                    except asyncio.TimeoutError:
+                        logger.warning("Sprint response timeout (15s)")
+                        sprint_failed = True
+                        self._sprint_result = "query timeout"
 
-        if sprint_failed or _has_insufficient_evidence_marker(self._sprint_result):
-            result = _build_insufficient_evidence_report(plan, self._sprint_result)
+                    if not sprint_failed:
+                        final_prompt = (
+                            f"{plan}\n\n"
+                            f"[Sprint result]\n{self._sprint_result}\n\n"
+                            "Use only evidence-backed reasoning. If evidence is insufficient, state that explicitly."
+                        )
+                        result = str(await asyncio.to_thread(self.agent, final_prompt))
 
-        await redis_client.publish("rca.output", {"type": "report", "sender": "RCA", "text": result})
+            if sprint_failed or _has_insufficient_evidence_marker(self._sprint_result):
+                result = _build_insufficient_evidence_report(plan, self._sprint_result)
+
+            await redis_client.publish("rca.output", {"type": "report", "sender": "RCA", "text": result})
+        finally:
+            self._is_running = False
 
     async def handle_sprint_result(self, data: dict):
         self._sprint_result = data.get("result", "")
