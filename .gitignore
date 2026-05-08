@@ -28,3 +28,6 @@ build/
 
 # Agent harness logs (local only)
 .agents-dev/log/
+
+# Local Claude Code settings (permissions/hooks)
+.claude/settings.local.json
