@@ -13,7 +13,16 @@ RCA_PROMPT_BASE = """
 2. 조사 순서: CloudWatch 알람/메트릭 → Application Signals(트레이싱) → EKS 이벤트/로그 → CloudTrail 변경 이력
 3. VPC3 데이터(Prometheus/ArgoCD/OpenSearch)가 필요하면 반드시 "__SPRINT__:{구체적 쿼리}" 형식으로 한 줄 삽입
 4. Read-only 원칙: 어떤 리소스도 수정하지 않음
+
+[핵심 모니터링 지표 및 장애 판단 기준]
+- Health Score (VPC2 상태): 'job:bookjjeok_health_score'. 80(Warning), 60(Critical), 40(Failover to VPC1) 기준.
+- Redis & DB 연쇄 장애 패턴:
+    - Redis Miss: 'rate(cache_gets_total{result="miss", job="vpc1-backend"}[2m])' 급증 시 의심.
+    - DB Connection: 'avg(hikaricp_connections_active{job="vpc1-backend"})' 15개 초과 시 Redis 장애로 인한 DB 부하 전이 판단.
+    - Response Time: 'http_server_requests_seconds' 평균 0.1s(100ms) 초과 시 지연 상황.
+- 에러율: 'job:envoy_error_rate:rate5m' 0.05(5%) 초과 시 인프라/네트워크 장애 가능성 높음.
 """
+
 
 MODE_INSTRUCTIONS = {
     "beginner": """
@@ -27,7 +36,7 @@ MODE_INSTRUCTIONS = {
 - 핵심 메트릭 수치, 에러 로그 원문, CloudTrail API 호출 이력을 가감 없이 보고하세요.
 - 불필요한 서술은 줄이고 기술적 사실 위주로 간결하게 작성하세요.
 - 아키텍처 관점에서의 근본 원인(Deep Root Cause)을 제시하세요.
-"""
+""",
 }
 
 RCA_OUTPUT_FORMAT = """
@@ -41,6 +50,7 @@ RCA_OUTPUT_FORMAT = """
 7. [권장 조치] (단기/장기 분리)
 """
 
+
 class RCAAgent:
     def __init__(self):
         self._mcp_clients = []
@@ -52,18 +62,14 @@ class RCAAgent:
         self._sprint_subscription_task = None
 
     async def _init_mcp(self):
-        # mcp_config.json 로드
         with open(settings.MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
-        
-        for name, srv in config.get("mcpServers", {}).items():
+
+        for _, srv in config.get("mcpServers", {}).items():
             env = srv.get("env", {}).copy()
-            # 환경변수 치환 (${EKS_CLUSTER_NAME} 등)
             for k, v in env.items():
                 if v == "${EKS_CLUSTER_NAME}":
                     env[k] = settings.EKS_CLUSTER_NAME
-            
-            # 기본 AWS 설정 주입
             env.setdefault("AWS_REGION", settings.AWS_REGION)
 
             client = MCPClient(lambda srv=srv, env=env: StdioServerParameters(
@@ -77,13 +83,16 @@ class RCAAgent:
             await client.__aenter__()
             tools = await client.list_tools()
             self._mcp_tools.extend(tools)
-            print(f"📦 [RCA] Loaded {len(tools)} tools from MCP server")
+            print(f"📦 [RCA] MCP 서버에서 {len(tools)}개 도구 로드")
 
-        # 초기 에이전트 (기본 프롬프트)
         self._build_agent("beginner")
 
     def _build_agent(self, mode: str):
-        system_prompt = f"{RCA_PROMPT_BASE}\n{MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS['beginner'])}\n{RCA_OUTPUT_FORMAT}"
+        system_prompt = (
+            f"{RCA_PROMPT_BASE}\n"
+            f"{MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS['beginner'])}\n"
+            f"{RCA_OUTPUT_FORMAT}"
+        )
         self.agent = Agent(
             model=BedrockModel(
                 model_id=settings.LLM_MODEL_EXPERT,
@@ -96,42 +105,48 @@ class RCAAgent:
     async def handle_plan(self, data: dict):
         mode = data.get("mode", "beginner")
         plan = data.get("plan", "")
-        
-        # 모드에 맞게 에이전트 시스템 프롬프트 재설정
+
         self._build_agent(mode)
 
-        await redis_client.publish("rca.output",
-            {"sender": "RCA", "text": f"🔍 증거 수집 시작 ({mode} 모드)..."})
+        await redis_client.publish("rca.output", {
+            "type": "status",
+            "sender": "RCA",
+            "text": f"🔍 증거 수집 시작 ({mode} 모드)...",
+        })
 
         result = str(await asyncio.to_thread(self.agent, plan))
 
         if "__SPRINT__:" in result:
-            before, rest = result.split("__SPRINT__:", 1)
+            _, rest = result.split("__SPRINT__:", 1)
             sprint_query = rest.strip().splitlines()[0]
 
-            # Race Condition 방지: Publish 전에 Event Clear
             self._sprint_event.clear()
             self._sprint_result = ""
             await redis_client.publish("rca.sprint", {"query": sprint_query})
-            await redis_client.publish("rca.output",
-                {"sender": "RCA", "text": f"⏳ Sprint 조회 요청: {sprint_query}"})
+            await redis_client.publish("rca.output", {
+                "type": "status",
+                "sender": "RCA",
+                "text": f"⏳ Sprint 조회 요청: {sprint_query}",
+            })
 
-            # Sprint 결과 대기
             try:
                 await asyncio.wait_for(self._sprint_event.wait(), timeout=15.0)
             except asyncio.TimeoutError:
-                print("⚠️ [RCA] Sprint request timed out")
+                print("⚠️ [RCA] Sprint 타임아웃")
                 self._sprint_result = "조회 타임아웃 발생"
 
-            # Sprint 결과 포함해 최종 분석
             final_prompt = (
-                f"{data['plan']}\n\n"
+                f"{plan}\n\n"
                 f"[Sprint 조회 결과]\n{self._sprint_result}\n\n"
                 "위 결과를 포함해 최종 RCA를 완성하세요."
             )
             result = str(await asyncio.to_thread(self.agent, final_prompt))
 
-        await redis_client.publish("rca.output", {"sender": "RCA", "text": result})
+        await redis_client.publish("rca.output", {
+            "type": "report",
+            "sender": "RCA",
+            "text": result,
+        })
 
     async def handle_sprint_result(self, data: dict):
         self._sprint_result = data.get("result", "")
@@ -140,6 +155,10 @@ class RCAAgent:
     async def start(self):
         await self._init_mcp()
         print("🧠  [RCA] rca.plan 및 rca.sprint.result 대기 중...")
-        self._plan_subscription_task = await redis_client.subscribe("rca.plan", self.handle_plan)
-        self._sprint_subscription_task = await redis_client.subscribe("rca.sprint.result", self.handle_sprint_result)
+        self._plan_subscription_task = await redis_client.subscribe(
+            "rca.plan", self.handle_plan
+        )
+        self._sprint_subscription_task = await redis_client.subscribe(
+            "rca.sprint.result", self.handle_sprint_result
+        )
         await asyncio.Future()
