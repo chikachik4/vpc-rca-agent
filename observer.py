@@ -35,13 +35,6 @@ class ObserverLoop:
                 "symptom_template": "VPC1 Pod 재시작 급증: {value:.0f}회/5분 (임계값 {threshold})",
             },
             {
-                "name": "health_score_low",
-                "promql": "job:bookjjeok_health_score",
-                "threshold": s.HEALTH_SCORE_THRESHOLD,
-                "compare": "lt",
-                "symptom_template": "VPC2 Health Score 저하: {value:.1f} (임계값 {threshold} 미만)",
-            },
-            {
                 "name": "redis_miss_rate",
                 "promql": 'rate(cache_gets_total{result="miss",job="vpc1-backend"}[2m])',
                 "threshold": s.REDIS_MISS_RATE_THRESHOLD,

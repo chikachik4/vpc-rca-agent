@@ -27,9 +27,8 @@ class Settings(BaseSettings):
     OBSERVER_INTERVAL_SEC: int = 15
 
     # ObserverLoop — 임계값
-    CPU_ALERT_THRESHOLD: float = 0.5          # cores (VPC1)
+    CPU_ALERT_THRESHOLD: float = 0.5          # cores (VPC1 EKS)
     POD_RESTART_THRESHOLD: int = 3             # 횟수/5분
-    HEALTH_SCORE_THRESHOLD: float = 80.0       # Health Score 하한 (80 미만 = Warning)
     REDIS_MISS_RATE_THRESHOLD: float = 0.1     # req/s
     DB_CONN_THRESHOLD: int = 15                # active connections
     RESPONSE_TIME_THRESHOLD: float = 0.1       # 초 (100ms)

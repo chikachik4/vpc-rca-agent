@@ -11,14 +11,14 @@ def loop():
 
 
 def test_queries_count(loop):
-    assert len(loop.QUERIES) == 7
+    assert len(loop.QUERIES) == 6
 
 
 def test_query_names(loop):
     names = {q["name"] for q in loop.QUERIES}
     assert "high_cpu" in names
     assert "pod_restart" in names
-    assert "health_score_low" in names
+    assert "health_score_low" not in names
     assert "redis_miss_rate" in names
     assert "db_connections" in names
     assert "response_time" in names
