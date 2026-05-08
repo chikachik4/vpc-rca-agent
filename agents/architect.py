@@ -6,8 +6,13 @@ from core.config import settings
 
 ARCHITECT_PROMPT = """
 당신은 인프라 장애 조사 계획을 수립하는 시니어 SRE입니다.
-사용자의 자연어 장애 보고를 받아 반드시 다음 JSON 형식으로만 출력하세요:
+사용자의 자연어 장애 보고를 받아 분석하고, 사용자의 의도나 말투를 보고 'beginner' 또는 'expert' 모드를 판별하세요.
+- beginner: 자동화된 전체 조사 선호, 친절하고 쉬운 용어 설명 필요.
+- expert: 특정 시간대/리소스 지정 선호, 기술적인 상세 메트릭 및 가설 검증 중심.
+
+반드시 다음 JSON 형식으로만 출력하세요:
 {
+  "mode": "beginner" 또는 "expert",
   "symptom": "증상 한 줄 요약",
   "timerange": "조사 시간 범위 (예: last 30m)",
   "vpc_scope": ["vpc1", "vpc3"],
