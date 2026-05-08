@@ -90,14 +90,21 @@ class RCAAgent:
                 args=srv["args"],
                 env=env,
             ))
+            entered = False
             try:
                 await client.__aenter__()
+                entered = True
                 tools = await client.list_tools()
                 self._mcp_clients.append(client)
                 self._mcp_tools.extend(tools)
                 logger.info("MCP 서버 [%s] — %d개 도구 로드", srv_name, len(tools))
             except Exception as e:
                 logger.error("MCP 서버 [%s] 초기화 실패, 건너뜀: %s", srv_name, e)
+                if entered:
+                    try:
+                        await client.__aexit__(None, None, None)
+                    except Exception:
+                        pass
 
         self._build_agent("beginner")
 
@@ -117,10 +124,12 @@ class RCAAgent:
         )
 
     def _extract_sprint_query(self, result: str) -> str:
-        """__SPRINT__: 마커에서 첫 번째 줄의 쿼리를 추출합니다. 실패 시 빈 문자열 반환."""
+        """__SPRINT__: 마커 바로 다음 줄의 쿼리를 추출합니다. 빈 줄이면 빈 문자열 반환."""
         try:
             _, rest = result.split("__SPRINT__:", 1)
-            return rest.strip().splitlines()[0].strip()
+            # rest.strip() 금지: 뒤따르는 빈 줄을 제거하면 "추가 내용"이 첫 줄로 올라옴
+            lines = rest.splitlines()
+            return lines[0].strip() if lines else ""
         except Exception as e:
             logger.warning("__SPRINT__ 쿼리 추출 실패: %s", e)
             return ""

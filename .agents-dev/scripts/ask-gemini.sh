@@ -65,7 +65,7 @@ fi
 mkdir -p "$LOG_DIR"
 TS="$(date +%Y%m%d-%H%M%S)"
 LOG="$LOG_DIR/gemini-$TS.log"
-ln -sfn "gemini-$TS.log" "$LOG_DIR/latest-gemini.log"
+ln -sfn "gemini-$TS.log" "$LOG_DIR/latest-gemini.log" 2>/dev/null || true
 
 {
   echo "=== ask-gemini.sh @ $TS ==="

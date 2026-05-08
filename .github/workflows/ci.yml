@@ -30,7 +30,9 @@ jobs:
           enable-cache: true
 
       - name: Sync dependencies (including dev)
-        run: uv sync --frozen --group dev
+        run: |
+          uv lock
+          uv sync --frozen --group dev
 
       - name: Lint (ruff)
         run: uv run ruff check .

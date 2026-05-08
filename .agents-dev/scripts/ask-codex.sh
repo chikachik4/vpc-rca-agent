@@ -70,7 +70,8 @@ fi
 mkdir -p "$LOG_DIR"
 TS="$(date +%Y%m%d-%H%M%S)"
 LOG="$LOG_DIR/codex-$TS.log"
-ln -sfn "codex-$TS.log" "$LOG_DIR/latest-codex.log"
+# ln -sfn skips silently on Windows (no symlink permission needed)
+ln -sfn "codex-$TS.log" "$LOG_DIR/latest-codex.log" 2>/dev/null || true
 
 {
   echo "=== ask-codex.sh @ $TS ==="
