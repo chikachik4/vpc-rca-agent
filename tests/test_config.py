@@ -1,4 +1,4 @@
-from core.config import settings
+from core.config import Settings, settings
 
 
 def test_defaults():
@@ -14,11 +14,14 @@ def test_defaults():
 
 
 def test_tls_defaults():
-    assert settings.TLS_VERIFY is True
-    assert settings.CA_BUNDLE_PATH == ""
+    # Use a fresh instance without .env so production overrides don't leak in.
+    s = Settings(_env_file=None)
+    assert s.TLS_VERIFY is True
+    assert s.CA_BUNDLE_PATH == ""
 
 
 def test_tls_helper_returns_bool_when_no_bundle():
-    verify = settings.CA_BUNDLE_PATH if settings.CA_BUNDLE_PATH else settings.TLS_VERIFY
+    s = Settings(_env_file=None)
+    verify = s.CA_BUNDLE_PATH if s.CA_BUNDLE_PATH else s.TLS_VERIFY
     assert isinstance(verify, bool)
     assert verify is True
