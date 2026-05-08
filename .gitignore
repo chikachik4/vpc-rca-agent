@@ -3,3 +3,25 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# Python build/test artifacts
+*.pyo
+*.pyd
+*.pytest_cache/
+*.mypy_cache/
+*.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local runtime artifacts
+*.log
+*.tmp
+.python-version
+
+# IDE/editor
+.idea/
+.vscode/
