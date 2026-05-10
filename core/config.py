@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     # ObserverLoop thresholds
     CPU_ALERT_THRESHOLD: float = 0.5
+    BACKEND_CPU_CORES_THRESHOLD: float = 0.1
     POD_RESTART_THRESHOLD: int = 3
     OOMKILL_THRESHOLD: int = 0
     MEMORY_UTILIZATION_THRESHOLD: float = 80.0

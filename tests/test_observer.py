@@ -11,12 +11,13 @@ def loop():
 
 
 def test_queries_count(loop):
-    assert len(loop.QUERIES) == 9
+    assert len(loop.QUERIES) == 10
 
 
 def test_query_names(loop):
     names = {query["name"] for query in loop.QUERIES}
     assert "high_cpu" in names
+    assert "backend_cpu_cores" in names
     assert "pod_restart" in names
     assert "backend_oomkill" in names
     assert "backend_memory_utilization" in names
@@ -33,6 +34,13 @@ def test_query_has_required_keys(loop):
     required = {"name", "promql", "threshold", "compare", "symptom_template"}
     for query in loop.QUERIES:
         assert required <= query.keys(), f"query {query['name']} is missing required keys"
+
+
+def test_query_severity_defaults(loop):
+    severities = {query["name"]: query.get("severity") for query in loop.QUERIES}
+    assert severities["backend_cpu_cores"] == "strong"
+    assert severities["backend_memory_utilization"] == "strong"
+    assert severities["backend_warn_error_logs"] == "weak"
 
 
 @pytest.mark.parametrize(
