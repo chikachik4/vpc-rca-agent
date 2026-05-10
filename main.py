@@ -68,7 +68,7 @@ async def main():
             asyncio.create_task(dispatcher.start(), name="dispatcher"),
         ]
         for task in tasks:
-            task.add_done_callback(lambda t, l=logger: _log_task_completion(t, l))
+            task.add_done_callback(lambda t, task_logger=logger: _log_task_completion(t, task_logger))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for task, result in zip(tasks, results):
