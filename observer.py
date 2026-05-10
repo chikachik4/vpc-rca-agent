@@ -84,8 +84,29 @@ class ObserverLoop:
                     'sum(kube_pod_status_ready{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",condition="true"} == 1)'
                 ),
                 "threshold": s.BACKEND_READY_REPLICAS_THRESHOLD,
+                "compare": "lt",
+                "symptom_template": "VPC1 backend ready pod count dropped: {value:.0f} (minimum {threshold})",
+                "severity": "strong",
+            },
+            {
+                "name": "backend_pending_pods",
+                "promql": (
+                    'sum(kube_pod_status_phase{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",phase="Pending"} == 1)'
+                ),
+                "threshold": s.BACKEND_PENDING_PODS_THRESHOLD,
                 "compare": "gt",
-                "symptom_template": "VPC1 backend ready pod count increased: {value:.0f} (threshold {threshold})",
+                "symptom_template": "VPC1 backend pods stuck pending: {value:.0f} pods",
+                "severity": "strong",
+            },
+            {
+                "name": "backend_crashloop_waiting",
+                "promql": (
+                    'sum(kube_pod_container_status_waiting_reason{'
+                    'cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",reason="CrashLoopBackOff"} == 1)'
+                ),
+                "threshold": s.BACKEND_CRASHLOOP_THRESHOLD,
+                "compare": "gt",
+                "symptom_template": "VPC1 backend CrashLoopBackOff detected: {value:.0f} pods",
                 "severity": "strong",
             },
             {

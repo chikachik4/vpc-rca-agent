@@ -34,6 +34,22 @@ Output JSON shape:
 """
 
 
+def _build_priority_steps(symptom: str) -> list[str]:
+    lowered = symptom.lower()
+    steps: list[str] = []
+
+    if any(keyword in lowered for keyword in ("warn", "error", "redis", "cache")):
+        steps.append("Check VPC1 Redis EC2 instance state and Redis-related CloudWatch metrics first")
+
+    if any(keyword in lowered for keyword in ("pod", "oom", "restart", "crashloop", "chaos", "evict")):
+        steps.append("Check EKS pod restarts, CrashLoopBackOff, OOMKilled, ready replica drop, and node events")
+
+    if any(keyword in lowered for keyword in ("latency", "timeout", "response", "delay")):
+        steps.append("Check backend latency, error rate, and downstream dependency saturation in Prometheus")
+
+    return steps
+
+
 def _normalize_plan(plan: dict, fallback_symptom: str) -> dict:
     mode = plan.get("mode", "beginner")
     if mode not in {"beginner", "expert"}:
@@ -44,6 +60,7 @@ def _normalize_plan(plan: dict, fallback_symptom: str) -> dict:
     steps = plan.get("investigation_steps", [])
     if not isinstance(steps, list) or not steps:
         steps = ["Check CloudWatch and EKS events", "Check OpenSearch and ArgoCD changes"]
+    steps = _build_priority_steps(symptom) + [str(step) for step in steps if str(step).strip()]
     hypothesis = str(plan.get("priority_hypothesis", "")).strip() or "initial hypothesis pending evidence"
 
     # Force canonical scope to avoid LLM drift such as "prod-vpc".

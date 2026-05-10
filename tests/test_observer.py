@@ -11,7 +11,7 @@ def loop():
 
 
 def test_queries_count(loop):
-    assert len(loop.QUERIES) == 10
+    assert len(loop.QUERIES) == 12
 
 
 def test_query_names(loop):
@@ -22,6 +22,8 @@ def test_query_names(loop):
     assert "backend_oomkill" in names
     assert "backend_memory_utilization" in names
     assert "backend_ready_replicas" in names
+    assert "backend_pending_pods" in names
+    assert "backend_crashloop_waiting" in names
     assert "health_score_low" not in names
     assert "backend_warn_error_logs" in names
     assert "redis_miss_rate" not in names
@@ -40,7 +42,13 @@ def test_query_severity_defaults(loop):
     severities = {query["name"]: query.get("severity") for query in loop.QUERIES}
     assert severities["backend_cpu_cores"] == "strong"
     assert severities["backend_memory_utilization"] == "strong"
+    assert severities["backend_ready_replicas"] == "strong"
     assert severities["backend_warn_error_logs"] == "weak"
+
+
+def test_ready_replicas_uses_lt_compare(loop):
+    query = next(query for query in loop.QUERIES if query["name"] == "backend_ready_replicas")
+    assert query["compare"] == "lt"
 
 
 @pytest.mark.parametrize(
