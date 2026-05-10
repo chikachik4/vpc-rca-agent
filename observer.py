@@ -41,6 +41,38 @@ class ObserverLoop:
                 "symptom_template": "VPC1 pod restarts increased: {value:.0f}/5m (threshold {threshold})",
             },
             {
+                "name": "backend_oomkill",
+                "promql": (
+                    'sum(increase(kube_pod_container_status_last_terminated_reason{'
+                    'cluster="vpc1",namespace="bookjjeok",reason="OOMKilled"}[5m]))'
+                ),
+                "threshold": s.OOMKILL_THRESHOLD,
+                "compare": "gt",
+                "symptom_template": "VPC1 backend OOMKill detected: {value:.0f}/5m",
+            },
+            {
+                "name": "backend_memory_utilization",
+                "promql": (
+                    "100 * "
+                    'sum(container_memory_working_set_bytes{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}) '
+                    "/ clamp_min("
+                    'sum(kube_pod_container_resource_limits{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",resource="memory",unit="byte"}), '
+                    "1)"
+                ),
+                "threshold": s.MEMORY_UTILIZATION_THRESHOLD,
+                "compare": "gt",
+                "symptom_template": "VPC1 backend memory pressure increased: {value:.1f}% (threshold {threshold}%)",
+            },
+            {
+                "name": "backend_ready_replicas",
+                "promql": (
+                    'sum(kube_pod_status_ready{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",condition="true"} == 1)'
+                ),
+                "threshold": s.BACKEND_READY_REPLICAS_THRESHOLD,
+                "compare": "gt",
+                "symptom_template": "VPC1 backend ready pod count increased: {value:.0f} (threshold {threshold})",
+            },
+            {
                 "name": "backend_warn_error_logs",
                 "promql": (
                     'sum(rate(logback_events_total{job="vpc1-backend",'

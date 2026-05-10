@@ -11,6 +11,31 @@ from infrastructure.redis_client import redis_client
 from observer import ObserverLoop
 
 
+def _log_task_completion(task: asyncio.Task, logger):
+    try:
+        if task.cancelled():
+            logger.warning("Task %s was cancelled", task.get_name())
+            return
+
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Task %s failed with %s: %s",
+                task.get_name(),
+                type(exc).__name__,
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return
+
+        result = task.result()
+        logger.warning("Task %s exited unexpectedly with result: %r", task.get_name(), result)
+    except asyncio.CancelledError:
+        logger.warning("Task %s was cancelled during completion logging", task.get_name())
+    except Exception as exc:
+        logger.error("Failed to inspect task %s: %s", task.get_name(), exc)
+
+
 async def main():
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
@@ -42,11 +67,27 @@ async def main():
             asyncio.create_task(observer.start(),   name="observer"),
             asyncio.create_task(dispatcher.start(), name="dispatcher"),
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for task in tasks:
+            task.add_done_callback(lambda t, l=logger: _log_task_completion(t, l))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for task, result in zip(tasks, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "Gather returned exception from task %s: %s: %s",
+                    task.get_name(),
+                    type(result).__name__,
+                    result,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
+            else:
+                logger.warning("Gather returned from task %s with result: %r", task.get_name(), result)
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("종료 신호를 받았습니다.")
     except Exception as e:
         logger.exception("시스템 구동 중 예외 발생: %s", e)
+    except BaseException as e:
+        logger.exception("시스템 구동 중 치명적 예외 발생: %s", e)
     finally:
         logger.info("종료 절차를 시작합니다...")
 
