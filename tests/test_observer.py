@@ -52,6 +52,13 @@ def test_ready_replicas_uses_lt_compare(loop):
     assert query["require_data"] is True
 
 
+def test_k8s_queries_do_not_require_cluster_label(loop):
+    queries = {query["name"]: query["promql"] for query in loop.QUERIES}
+    assert 'cluster="vpc1"' not in queries["backend_cpu_cores"]
+    assert 'cluster="vpc1"' not in queries["backend_memory_utilization"]
+    assert 'cluster="vpc1"' not in queries["backend_ready_replicas"]
+
+
 @pytest.mark.parametrize(
     "compare,value,threshold,expected",
     [

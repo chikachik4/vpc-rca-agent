@@ -28,7 +28,7 @@ class ObserverLoop:
         return [
             {
                 "name": "high_cpu",
-                "promql": 'sum(rate(container_cpu_usage_seconds_total{id="/",cluster="vpc1"}[2m]))',
+                "promql": 'sum(rate(container_cpu_usage_seconds_total{id="/"}[2m]))',
                 "threshold": s.CPU_ALERT_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 CPU usage spike: {value:.2f} cores (threshold {threshold})",
@@ -38,7 +38,7 @@ class ObserverLoop:
                 "name": "backend_cpu_cores",
                 "promql": (
                     'sum(rate(container_cpu_usage_seconds_total{'
-                    'cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}[2m]))'
+                    'namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}[2m]))'
                 ),
                 "threshold": s.BACKEND_CPU_CORES_THRESHOLD,
                 "compare": "gt",
@@ -47,7 +47,7 @@ class ObserverLoop:
             },
             {
                 "name": "pod_restart",
-                "promql": 'sum(increase(kube_pod_container_status_restarts_total{cluster="vpc1"}[5m]))',
+                "promql": 'sum(increase(kube_pod_container_status_restarts_total[5m]))',
                 "threshold": s.POD_RESTART_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 pod restarts increased: {value:.0f}/5m (threshold {threshold})",
@@ -57,7 +57,7 @@ class ObserverLoop:
                 "name": "backend_oomkill",
                 "promql": (
                     'sum(increase(kube_pod_container_status_last_terminated_reason{'
-                    'cluster="vpc1",namespace="bookjjeok",reason="OOMKilled"}[5m]))'
+                    'namespace="bookjjeok",reason="OOMKilled"}[5m]))'
                 ),
                 "threshold": s.OOMKILL_THRESHOLD,
                 "compare": "gt",
@@ -68,9 +68,9 @@ class ObserverLoop:
                 "name": "backend_memory_utilization",
                 "promql": (
                     "100 * "
-                    'sum(container_memory_working_set_bytes{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}) '
+                    'sum(container_memory_working_set_bytes{namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}) '
                     "/ clamp_min("
-                    'sum(kube_pod_container_resource_limits{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",resource="memory",unit="byte"}), '
+                    'sum(kube_pod_container_resource_limits{namespace="bookjjeok",pod=~"backend-.*",resource="memory",unit="byte"}), '
                     "1)"
                 ),
                 "threshold": s.MEMORY_UTILIZATION_THRESHOLD,
@@ -81,7 +81,7 @@ class ObserverLoop:
             {
                 "name": "backend_ready_replicas",
                 "promql": (
-                    'sum(kube_pod_status_ready{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",condition="true"} == 1)'
+                    'sum(kube_pod_status_ready{namespace="bookjjeok",pod=~"backend-.*",condition="true"} == 1)'
                 ),
                 "threshold": s.BACKEND_READY_REPLICAS_THRESHOLD,
                 "compare": "lt",
@@ -92,7 +92,7 @@ class ObserverLoop:
             {
                 "name": "backend_pending_pods",
                 "promql": (
-                    'sum(kube_pod_status_phase{cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",phase="Pending"} == 1)'
+                    'sum(kube_pod_status_phase{namespace="bookjjeok",pod=~"backend-.*",phase="Pending"} == 1)'
                 ),
                 "threshold": s.BACKEND_PENDING_PODS_THRESHOLD,
                 "compare": "gt",
@@ -104,7 +104,7 @@ class ObserverLoop:
                 "name": "backend_crashloop_waiting",
                 "promql": (
                     'sum(kube_pod_container_status_waiting_reason{'
-                    'cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",reason="CrashLoopBackOff"} == 1)'
+                    'namespace="bookjjeok",pod=~"backend-.*",reason="CrashLoopBackOff"} == 1)'
                 ),
                 "threshold": s.BACKEND_CRASHLOOP_THRESHOLD,
                 "compare": "gt",
