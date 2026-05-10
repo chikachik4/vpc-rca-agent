@@ -59,6 +59,28 @@ def _build_insufficient_evidence_report(plan: str, sprint_result: str) -> str:
     )
 
 
+def _build_focus_hints(plan: str, original: str) -> str:
+    lowered = f"{plan}\n{original}".lower()
+    hints: list[str] = []
+
+    if any(keyword in lowered for keyword in ("warn", "error", "redis", "cache")):
+        hints.append(
+            "- Before concluding evidence is insufficient, verify whether the VPC1 Redis EC2 instance is stopped,"
+            " impaired, or showing Redis/host-level saturation."
+        )
+
+    if any(keyword in lowered for keyword in ("pod", "oom", "restart", "crashloop", "chaos", "evict")):
+        hints.append(
+            "- Treat pod chaos patterns as a first-class hypothesis: inspect restart spikes, CrashLoopBackOff,"
+            " OOMKilled, ready replica drops, pending pods, and node disruption events before broader hypotheses."
+        )
+
+    if not hints:
+        return ""
+
+    return "[Investigation focus]\n" + "\n".join(hints)
+
+
 RCA_PROMPT_BASE = """
 You are a DevOps RCA agent for Bookjjeok AWS.
 
@@ -196,11 +218,12 @@ class RCAAgent:
             mode = raw_mode if raw_mode in MODE_INSTRUCTIONS else "beginner"
 
             plan = data.get("plan", "").strip()
+            original = str(data.get("original", ""))
             if not plan:
                 plan = json.dumps(
                     {
                         "mode": mode,
-                        "symptom": data.get("original", "unknown incident"),
+                        "symptom": original or "unknown incident",
                         "timerange": "last 1h",
                         "vpc_scope": ["vpc1", "vpc3"],
                         "investigation_steps": ["Check CloudWatch", "Check EKS events"],
@@ -216,7 +239,9 @@ class RCAAgent:
                 {"type": "status", "sender": "RCA", "text": f"[RCA] Evidence collection started ({mode})..."},
             )
 
-            first_pass = str(await asyncio.to_thread(self.agent, plan))
+            focus_hints = _build_focus_hints(plan, original)
+            first_pass_prompt = f"{plan}\n\n{focus_hints}".strip()
+            first_pass = str(await asyncio.to_thread(self.agent, first_pass_prompt))
             sprint_failed = False
             result = first_pass
 
@@ -244,6 +269,7 @@ class RCAAgent:
                     if not sprint_failed:
                         final_prompt = (
                             f"{plan}\n\n"
+                            f"{focus_hints}\n\n"
                             f"[Sprint result]\n{self._sprint_result}\n\n"
                             "Use only evidence-backed reasoning. If evidence is insufficient, state that explicitly."
                         )
