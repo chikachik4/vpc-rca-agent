@@ -49,6 +49,7 @@ def test_query_severity_defaults(loop):
 def test_ready_replicas_uses_lt_compare(loop):
     query = next(query for query in loop.QUERIES if query["name"] == "backend_ready_replicas")
     assert query["compare"] == "lt"
+    assert query["require_data"] is True
 
 
 @pytest.mark.parametrize(
@@ -72,8 +73,9 @@ async def test_query_returns_none_on_http_error(loop):
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.get.side_effect = Exception("connection refused")
 
-        result = await loop._query("up")
-        assert result is None
+        value, has_data = await loop._query("up")
+        assert value is None
+        assert has_data is False
 
 
 @pytest.mark.asyncio
@@ -88,8 +90,9 @@ async def test_query_returns_zero_on_empty_result(loop):
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await loop._query("up")
-        assert result == 0.0
+        value, has_data = await loop._query("up")
+        assert value == 0.0
+        assert has_data is False
 
 
 @pytest.mark.asyncio
@@ -106,8 +109,9 @@ async def test_query_returns_zero_on_nan(loop):
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        result = await loop._query("up")
-        assert result == 0.0
+        value, has_data = await loop._query("up")
+        assert value == 0.0
+        assert has_data is True
 
 
 def test_cooldown_logic(loop):

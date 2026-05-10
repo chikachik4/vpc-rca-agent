@@ -85,6 +85,7 @@ class ObserverLoop:
                 ),
                 "threshold": s.BACKEND_READY_REPLICAS_THRESHOLD,
                 "compare": "lt",
+                "require_data": True,
                 "symptom_template": "VPC1 backend ready pod count dropped: {value:.0f} (minimum {threshold})",
                 "severity": "strong",
             },
@@ -95,6 +96,7 @@ class ObserverLoop:
                 ),
                 "threshold": s.BACKEND_PENDING_PODS_THRESHOLD,
                 "compare": "gt",
+                "require_data": True,
                 "symptom_template": "VPC1 backend pods stuck pending: {value:.0f} pods",
                 "severity": "strong",
             },
@@ -106,6 +108,7 @@ class ObserverLoop:
                 ),
                 "threshold": s.BACKEND_CRASHLOOP_THRESHOLD,
                 "compare": "gt",
+                "require_data": True,
                 "symptom_template": "VPC1 backend CrashLoopBackOff detected: {value:.0f} pods",
                 "severity": "strong",
             },
@@ -149,8 +152,8 @@ class ObserverLoop:
             },
         ]
 
-    async def _query(self, promql: str) -> float | None:
-        """Return 0.0 for empty/non-finite data and None when Prometheus itself fails."""
+    async def _query(self, promql: str) -> tuple[float | None, bool]:
+        """Return metric value plus whether Prometheus returned at least one sample."""
         try:
             async with httpx.AsyncClient(verify=_tls()) as client:
                 response = await client.get(
@@ -162,22 +165,22 @@ class ObserverLoop:
                 data = response.json()
                 result = data["data"]["result"]
                 if not result:
-                    return 0.0
+                    return 0.0, False
 
                 value = float(result[0]["value"][1])
                 if math.isnan(value) or math.isinf(value):
                     logger.warning("Prometheus query returned non-finite value (%s): %s", promql[:80], value)
-                    return 0.0
-                return value
+                    return 0.0, True
+                return value, True
         except KeyError as exc:
             logger.warning("Prometheus response parse failed (%s): %s", promql[:80], exc)
-            return None
+            return None, False
         except httpx.HTTPStatusError as exc:
             logger.error("Prometheus HTTP error (%s): %s", promql[:80], exc)
-            return None
+            return None, False
         except Exception as exc:
             logger.error("Prometheus query failed (%s): %s", promql[:80], exc)
-            return None
+            return None, False
 
     def _breached(self, value: float, threshold: float, compare: str) -> bool:
         if compare == "gt":
@@ -201,18 +204,25 @@ class ObserverLoop:
         while True:
             evaluations: list[dict] = []
             for query in self.QUERIES:
-                value = await self._query(query["promql"])
+                value, has_data = await self._query(query["promql"])
                 if value is None:
+                    continue
+                if query.get("require_data") and not has_data:
+                    logger.warning(
+                        "Observer query [%s] returned no samples; suppressing alert instead of treating it as zero",
+                        query["name"],
+                    )
                     continue
 
                 breached = self._breached(value, query["threshold"], query["compare"])
                 logger.info(
-                    "Observer query [%s]: value=%s threshold=%s compare=%s breached=%s",
+                    "Observer query [%s]: value=%s threshold=%s compare=%s breached=%s has_data=%s",
                     query["name"],
                     value,
                     query["threshold"],
                     query["compare"],
                     breached,
+                    has_data,
                 )
 
                 evaluations.append(
