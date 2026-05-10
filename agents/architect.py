@@ -38,14 +38,17 @@ def _build_priority_steps(symptom: str) -> list[str]:
     lowered = symptom.lower()
     steps: list[str] = []
 
-    if any(keyword in lowered for keyword in ("warn", "error", "redis", "cache")):
-        steps.append("Check VPC1 Redis EC2 instance state and Redis-related CloudWatch metrics first")
+    if any(keyword in lowered for keyword in ("cpu", "memory", "latency", "timeout", "response", "delay")):
+        steps.append("Check EKS pod CPU and memory usage, deployment replica count, HPA activity, and node pressure first")
 
     if any(keyword in lowered for keyword in ("pod", "oom", "restart", "crashloop", "chaos", "evict")):
         steps.append("Check EKS pod restarts, CrashLoopBackOff, OOMKilled, ready replica drop, and node events")
 
     if any(keyword in lowered for keyword in ("latency", "timeout", "response", "delay")):
         steps.append("Check backend latency, error rate, and downstream dependency saturation in Prometheus")
+
+    if any(keyword in lowered for keyword in ("redis", "cache")):
+        steps.append("Check VPC1 Redis EC2 instance state and Redis-related CloudWatch metrics after EKS evidence review")
 
     return steps
 
