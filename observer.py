@@ -32,6 +32,18 @@ class ObserverLoop:
                 "threshold": s.CPU_ALERT_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 CPU usage spike: {value:.2f} cores (threshold {threshold})",
+                "severity": "medium",
+            },
+            {
+                "name": "backend_cpu_cores",
+                "promql": (
+                    'sum(rate(container_cpu_usage_seconds_total{'
+                    'cluster="vpc1",namespace="bookjjeok",pod=~"backend-.*",container!="",image!=""}[2m]))'
+                ),
+                "threshold": s.BACKEND_CPU_CORES_THRESHOLD,
+                "compare": "gt",
+                "symptom_template": "VPC1 backend CPU pressure increased: {value:.2f} cores (threshold {threshold})",
+                "severity": "strong",
             },
             {
                 "name": "pod_restart",
@@ -39,6 +51,7 @@ class ObserverLoop:
                 "threshold": s.POD_RESTART_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 pod restarts increased: {value:.0f}/5m (threshold {threshold})",
+                "severity": "strong",
             },
             {
                 "name": "backend_oomkill",
@@ -49,6 +62,7 @@ class ObserverLoop:
                 "threshold": s.OOMKILL_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 backend OOMKill detected: {value:.0f}/5m",
+                "severity": "strong",
             },
             {
                 "name": "backend_memory_utilization",
@@ -62,6 +76,7 @@ class ObserverLoop:
                 "threshold": s.MEMORY_UTILIZATION_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 backend memory pressure increased: {value:.1f}% (threshold {threshold}%)",
+                "severity": "strong",
             },
             {
                 "name": "backend_ready_replicas",
@@ -71,6 +86,7 @@ class ObserverLoop:
                 "threshold": s.BACKEND_READY_REPLICAS_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 backend ready pod count increased: {value:.0f} (threshold {threshold})",
+                "severity": "strong",
             },
             {
                 "name": "backend_warn_error_logs",
@@ -81,6 +97,7 @@ class ObserverLoop:
                 "threshold": 0.05,
                 "compare": "gt",
                 "symptom_template": "VPC1 backend WARN/ERROR logs increased: {value:.3f} events/s",
+                "severity": "weak",
             },
             {
                 "name": "db_connections",
@@ -88,6 +105,7 @@ class ObserverLoop:
                 "threshold": s.DB_CONN_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC3 RDS connection pressure from VPC1 backend: {value:.0f} active (threshold {threshold})",
+                "severity": "medium",
             },
             {
                 "name": "response_time",
@@ -98,6 +116,7 @@ class ObserverLoop:
                 "threshold": s.RESPONSE_TIME_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "VPC1 backend response latency increased: {value:.3f}s (threshold {threshold}s)",
+                "severity": "medium",
             },
             {
                 "name": "envoy_error_rate",
@@ -105,6 +124,7 @@ class ObserverLoop:
                 "threshold": s.ERROR_RATE_THRESHOLD,
                 "compare": "gt",
                 "symptom_template": "Ingress/service mesh error rate spike: {value:.1%} (threshold {threshold:.0%})",
+                "severity": "medium",
             },
         ]
 
@@ -158,6 +178,7 @@ class ObserverLoop:
             len(self.QUERIES),
         )
         while True:
+            evaluations: list[dict] = []
             for query in self.QUERIES:
                 value = await self._query(query["promql"])
                 if value is None:
@@ -173,7 +194,34 @@ class ObserverLoop:
                     breached,
                 )
 
+                evaluations.append(
+                    {
+                        "query": query,
+                        "value": value,
+                        "breached": breached,
+                    }
+                )
+
+            strong_breaches = {
+                item["query"]["name"]
+                for item in evaluations
+                if item["breached"] and item["query"].get("severity") == "strong"
+            }
+
+            for item in evaluations:
+                query = item["query"]
+                value = item["value"]
+                breached = item["breached"]
+
                 if breached:
+                    if query.get("severity") == "weak" and strong_breaches:
+                        logger.info(
+                            "Observer weak signal [%s] suppressed because strong signals are active: %s",
+                            query["name"],
+                            ", ".join(sorted(strong_breaches)),
+                        )
+                        continue
+
                     if self._is_in_cooldown(query["name"]):
                         logger.info(
                             "Observer cooldown active [%s], skipping duplicate trigger",
