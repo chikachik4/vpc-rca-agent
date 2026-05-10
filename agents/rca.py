@@ -63,10 +63,16 @@ def _build_focus_hints(plan: str, original: str) -> str:
     lowered = f"{plan}\n{original}".lower()
     hints: list[str] = []
 
-    if any(keyword in lowered for keyword in ("warn", "error", "redis", "cache")):
+    if any(keyword in lowered for keyword in ("cpu", "memory", "latency", "timeout", "response", "delay")):
         hints.append(
-            "- Before concluding evidence is insufficient, verify whether the VPC1 Redis EC2 instance is stopped,"
-            " impaired, or showing Redis/host-level saturation."
+            "- For CPU, latency, or memory spikes affecting backend workloads, prioritize EKS evidence first:"
+            " pod resource usage, deployment replica changes, HPA activity, restart spikes, and node pressure."
+        )
+
+    if any(keyword in lowered for keyword in ("redis", "cache")):
+        hints.append(
+            "- Only elevate Redis as the leading hypothesis when there is direct evidence such as Redis errors,"
+            " connection failures, EC2 state issues, or Redis-specific saturation metrics."
         )
 
     if any(keyword in lowered for keyword in ("pod", "oom", "restart", "crashloop", "chaos", "evict")):
@@ -94,10 +100,12 @@ You are a DevOps RCA agent for Bookjjeok AWS.
 2. Read-only evidence only.
 3. Treat incoming symptom as trigger, not diagnosis.
 4. Build and reduce hypotheses from evidence.
-5. If VPC3 data is needed, request exactly one Sprint line:
+5. For CPU, memory, latency, and replica anomalies in backend workloads, prioritize EKS pod/node/HPA evidence before Redis hypotheses.
+6. Only treat Redis as the primary cause when direct Redis-specific evidence exists.
+7. If VPC3 data is needed, request exactly one Sprint line:
    __SPRINT__:{specific query}
-6. If evidence is insufficient, do not output a confident final root cause.
-7. For aws___call_aws time parameters (for example --start-time / --end-time),
+8. If evidence is insufficient, do not output a confident final root cause.
+9. For aws___call_aws time parameters (for example --start-time / --end-time),
    always pass Unix epoch integers in seconds, not ISO strings.
 """
 
